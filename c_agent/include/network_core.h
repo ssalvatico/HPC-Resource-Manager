@@ -41,4 +41,38 @@ int make_socket_non_blocking(int sockfd);
  */
 int add_to_epoll_interest_list(int epoll_fd, int target_fd, uint32_t events);
 
+/**
+ * @brief Creates a connectionless datagram socket and binds it to a specified port.
+ * * Reference: man 2 socket, man 2 bind, man 7 udp.    
+ * This function creates an IPv4 (AF_INET), UDP (SOCK_DGRAM) socket. 
+ * It sets the SO_REUSEADDR option to allow immediate port reuse and binds 
+ * the socket to all available network interfaces (INADDR_ANY). 
+ * Unlike TCP, this socket does not require listen() or accept() and is 
+ * immediately ready to receive datagrams using recvfrom().
+ * * @param port The port number to bind the listening UDP socket.
+ * @return The file descriptor referencing the socket, or -1 on error.
+ */
+int create_udp_listener(int port);
+
+/**
+ * @brief Transmits a UDP broadcast message to the entire local network.
+ * * Reference: man 2 sendto, man 7 socket.
+ * This function uses a UDP socket to send a datagram to the IPv4 broadcast 
+ * address (INADDR_BROADCAST / 255.255.255.255). The underlying socket MUST have 
+ * the SO_BROADCAST option enabled via setsockopt() before calling this function, 
+ * otherwise the kernel will reject the transmission with an EACCES error.
+ * * @param sock_fd      A valid UDP socket file descriptor with SO_BROADCAST enabled.
+ * @param target_port  The destination port where other agents are listening for UDP.
+ * @param message      The null-terminated string to be broadcasted (e.g., "ANNOUNCE").
+ * @return The number of bytes sent on success, or -1 on error.
+ */
+ssize_t broadcast_announce(int sock_fd, int target_port, const char *message);
+
+/**
+ * @brief Enables the broadcast flag on a given socket.
+ * * @param sock_fd The file descriptor of the socket to configure.
+ * @return 0 on success, or -1 on error.
+ */
+int enable_socket_broadcast(int sock_fd);
+
 #endif
