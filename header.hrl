@@ -1,7 +1,12 @@
 
--define(IP, "localhost").
-
+-define(HOST, "127.0.0.1").
 -define(PORT, 8000).
+-define(TRIES, 3).
+
+-define(TIMESTAMP, calendar:local_time()).
+
+-define(TIMEOUT, 5000).
+-define(WORK_TIME, 1000).
 
 -define(RES_ORDER(Type),
     case Type of
@@ -13,7 +18,7 @@
 
 -record(logInfo,{
     status,
-    src_module,
+    src_method,
     detail,
     job_involved,
     timestamp
