@@ -1,6 +1,6 @@
 -module(erlang_c_bridge).
 -include("header.hrl").
-
+-export([init/0, conn_handler/3, sender/3, receiver/3]).
 
 %%% Connect tiene la responsabilidad de conectarse al agente C
 %%% en ?HOST:?PORT.
@@ -40,7 +40,8 @@ connect(ServLoggerId, Nth_try, JobSchedulerId) ->
 conn_handler(ServLoggerId, Socket, JobSchedulerId) ->
     ReceiverId = spawn(?MODULE, receiver, [ServLoggerId, Socket, JobSchedulerId]),
     SenderId = spawn(?MODULE, sender, [ServLoggerId, Socket, JobSchedulerId]),
-    JobSchedulerId ! {ok, ReceiverId, SenderId}.
+    JobSchedulerId ! {receiver_pid, ReceiverId},
+    JobSchedulerId ! {sender_pid, SenderId}.
 
 %%% C -> RESPONSE -> receiver -> scheduler
 receiver(ServLoggerId, Socket, JobSchedulerId) ->
