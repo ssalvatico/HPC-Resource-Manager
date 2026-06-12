@@ -32,9 +32,9 @@ conn_handler(ServLoggerId, Socket, JobSchedulerId) ->
 
 %%% C -> RESPONSE -> receiver -> scheduler
 receiver(ServLoggerId, Socket, JobSchedulerId) ->
-    case gen_tcp:recv(Socket, 0, ?TIMEOUT) of
+    case gen_tcp:recv(Socket, 0, infinity) of
         {ok, Packet} ->
-            JobSchedulerId ! {ok, Packet},
+            JobSchedulerId ! {packet_received, Packet},
             log_event(ServLoggerId, ok, {?MODULE, ?FUNCTION_NAME}, "C response", none),
                                 receiver(ServLoggerId, Socket, JobSchedulerId);
         {error, Reason} ->
