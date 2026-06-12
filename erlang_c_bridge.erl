@@ -120,6 +120,6 @@ sender(ServLoggerId, Socket, JobSchedulerId) ->
 
 
 init() -> 
-    ServLoggerId = spawn(logger, init, []),
+    ServLoggerId = spawn(event_logger, init, []),
     JobSchedulerId = spawn(job_scheduler, init, []),
     connect(ServLoggerId, ?TRIES, JobSchedulerId).
