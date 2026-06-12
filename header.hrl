@@ -37,3 +37,12 @@
     nth_try     % Integer for the backoff to wait
 }).
 
+% Represents a C Node data
+-record(node,{
+    ip,
+    port,  
+    cpu,
+    mem,
+    gpu
+}).
+
