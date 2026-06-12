@@ -8,32 +8,19 @@
 %%% crea el proceso conn_handler y termina.
 %%% Para evitar problemas, connect tiene 3 intentos para una conexion
 %%% exitosa. En caso de error, notifica al logger y termina.
+
 connect(ServLoggerId, 0, JobSchedulerId) ->
-    ServLoggerId ! #logInfo{status = error,
-                            src_method = {?MODULE, ?FUNCTION_NAME},
-                            detail = "Out of tries.",
-                            job_involved = none,
-                            timestamp = ?TIMESTAMP
-                          },
-    JobSchedulerId ! {error, "Out of tries"};
+    log_event(ServLoggerId, error, {?MODULE, ?FUNCTION_NAME}, "Out of retries", none),
+    JobSchedulerId ! {error, "Out of retries"};
+
 connect(ServLoggerId, Nth_try, JobSchedulerId) ->
     case gen_tcp:connect(?HOST , ?PORT , [binary, {active, false}] , ?TIMEOUT) of
         {ok, Socket} ->
-            ServLoggerId ! #logInfo{status = ok,
-                                    src_method = {?MODULE, ?FUNCTION_NAME},
-                                    detail = "Connection succesful.",
-                                    job_involved = none,
-                                    timestamp = ?TIMESTAMP
-                                },
+            log_event(ServLoggerId, ok, {?MODULE, ?FUNCTION_NAME}, "Connection succesful", none),
             spawn(?MODULE, conn_handler, [ServLoggerId, Socket, JobSchedulerId]);
     
         {error, Reason} -> 
-            ServLoggerId ! #logInfo{status = error,
-                                    src_method = {?MODULE, ?FUNCTION_NAME},
-                                    detail = Reason,
-                                    job_involved = none,
-                                    timestamp = ?TIMESTAMP
-                                },
+            log_event(ServLoggerId, error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
                                 connect(ServLoggerId, Nth_try - 1, JobSchedulerId)
     end.
 
@@ -48,12 +35,7 @@ receiver(ServLoggerId, Socket, JobSchedulerId) ->
     case gen_tcp:recv(Socket, 0, ?TIMEOUT) of
         {ok, Packet} ->
             JobSchedulerId ! {ok, Packet},
-            ServLoggerId ! #logInfo{status = ok,
-                                    src_method = {?MODULE, ?FUNCTION_NAME},
-                                    detail = "C response.",
-                                    job_involved = none,
-                                    timestamp = ?TIMESTAMP
-                                },
+            log_event(ServLoggerId, ok, {?MODULE, ?FUNCTION_NAME}, "C response", none),
                                 receiver(ServLoggerId, Socket, JobSchedulerId);
         {error, closed} ->
             JobSchedulerId ! {error, closed},
@@ -65,12 +47,7 @@ receiver(ServLoggerId, Socket, JobSchedulerId) ->
                                 };
         {error, Reason} ->
             JobSchedulerId ! {error, Reason},
-            ServLoggerId ! #logInfo{status = error,
-                                    src_method = {?MODULE, ?FUNCTION_NAME},
-                                    detail = Reason,
-                                    job_involved = none,
-                                    timestamp = ?TIMESTAMP
-                                }
+            log_event(ServLoggerId, error, {?MODULE, ?FUNCTION_NAME}, Reason, none)
     end,
     ok.
 
@@ -80,40 +57,20 @@ sender(ServLoggerId, Socket, JobSchedulerId) ->
         {get_nodes} ->
             case gen_tcp:send(Socket, <<"GET_NODES">>) of
                 ok ->
-                    ServLoggerId ! #logInfo{status = ok,
-                                            src_method = {?MODULE, ?FUNCTION_NAME},
-                                            detail = get_nodes,
-                                            job_involved = none,
-                                            timestamp = ?TIMESTAMP
-                                        },
+                    log_event(ServLoggerId, ok, {?MODULE, ?FUNCTION_NAME}, get_nodes, none),
                     JobSchedulerId ! {ok, get_nodes};
                 {error, Reason} ->
-                    ServLoggerId ! #logInfo{status = error,
-                                            src_method = {?MODULE, ?FUNCTION_NAME},
-                                            detail = Reason,
-                                            job_involved = none,
-                                            timestamp = ?TIMESTAMP
-                                        },
+                    log_event(ServLoggerId, error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
                     JobSchedulerId ! {error, get_nodes}
             end;
         % Here we cover the cases JOB_REQUEST and JOB_RELEASE
         {job_directive, JobId, Packet} ->
             case gen_tcp:send(Socket, Packet) of
                 ok ->
-                    ServLoggerId ! #logInfo{status = ok,
-                                            src_method = {?MODULE, ?FUNCTION_NAME},
-                                            detail = job_directive,
-                                            job_involved = JobId,
-                                            timestamp = ?TIMESTAMP
-                                        },
+                    log_event(ServLoggerId, ok, {?MODULE, ?FUNCTION_NAME}, job_directive, JobId),
                     JobSchedulerId ! {ok, JobId, job_directive};
                 {error, Reason} ->
-                    ServLoggerId ! #logInfo{status = error,
-                                            src_method = {?MODULE, ?FUNCTION_NAME},
-                                            detail = Reason,
-                                            job_involved = JobId,
-                                            timestamp = ?TIMESTAMP
-                                        },
+                    log_event(ServLoggerId, error, {?MODULE, ?FUNCTION_NAME}, Reason, JobId),
                     JobSchedulerId ! {error, JobId, job_directive}
             end
     end,
@@ -124,3 +81,12 @@ init() ->
     ServLoggerId = spawn(event_logger, init, []),
     JobSchedulerId = spawn(job_scheduler, init, []),
     connect(ServLoggerId, ?TRIES, JobSchedulerId).
+
+log_event(ServLoggerId, Status, SrcMethod, Detail, JobInvolved) ->
+    ServLoggerId ! #logInfo{status = Status,
+                              src_method = SrcMethod,
+                              detail = Detail,
+                              job_involved = JobInvolved,
+                              timestamp = ?TIMESTAMP},
+    ok.
+    
