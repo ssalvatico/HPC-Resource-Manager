@@ -37,14 +37,6 @@ receiver(ServLoggerId, Socket, JobSchedulerId) ->
             JobSchedulerId ! {ok, Packet},
             log_event(ServLoggerId, ok, {?MODULE, ?FUNCTION_NAME}, "C response", none),
                                 receiver(ServLoggerId, Socket, JobSchedulerId);
-        {error, closed} ->
-            JobSchedulerId ! {error, closed},
-            ServLoggerId ! #logInfo{status = error,
-                                    src_method = {?MODULE, ?FUNCTION_NAME},
-                                    detail = closed,
-                                    job_involved = none,
-                                    timestamp = ?TIMESTAMP
-                                };
         {error, Reason} ->
             JobSchedulerId ! {error, Reason},
             log_event(ServLoggerId, error, {?MODULE, ?FUNCTION_NAME}, Reason, none)
