@@ -5,8 +5,10 @@
 #include <fcntl.h>
 #include <sys/socket.h> 
 #include <netinet/in.h>
+#include <string.h>
 
 #define LISTEN_BACKLOG 10
+#define BUFFER_SIZE 256
 
 // por ahora es bloqueante y atiende a cualquier ip que se quiera conectar al puerto especificado
 int create_tcp_listener(int port){
@@ -76,29 +78,35 @@ int add_to_epoll_interest_list(int epoll_fd, int target_fd, uint32_t events){
     return 0;
 }
 
-int create_udp_listener(int port){
+int create_udp_listener_broadcaster(int port) {
     int sockfd;
-
-    // 1. Create socket 
     struct sockaddr_in server_addr;
-    sockfd = socket(AF_INET, SOCK_DGRAM,0);
-    if(sockfd == -1)return -1;
 
-    // 2. Config socket
+    // 1. create socket
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd == -1) {
+        return -1;
+    }
 
-    // config to reuse address
-    int optval = 1;
+    // 2. config socket
+    int optval = 1; // 1 = Activado
+    
     if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0) {
         close(sockfd);
         return -1;
     }
 
+    if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &optval, sizeof(optval)) < 0) {
+        close(sockfd);
+        return -1;
+    }
+    memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(port);
 
-    // 3. bind socket
-    if(bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) == -1){
+    // 4. bind socket
+    if (bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
         close(sockfd);
         return -1;
     }
@@ -106,4 +114,30 @@ int create_udp_listener(int port){
     return sockfd;
 }
 
-// PARA DEFINIR EL BROADCASTER USAR EL MISMO SOCKET QUE EL DE ESCUCHA UDP
+ssize_t broadcast_announce(int sockfd, int targetport, const char *message){
+    struct sockaddr_in destaddr;
+    // 1. config
+    memset(&destaddr, 0, sizeof(destaddr));
+    destaddr.sin_family = AF_INET;
+    destaddr.sin_addr.s_addr = INADDR_BROADCAST; // todas las computadoras conectadas a la red local
+    destaddr.sin_port = (targetport);
+    // 2. send
+    return sendto(sockfd, message, strlen(message), 0,&destaddr, sizeof(destaddr));
+}
+
+int process_discovery_datagram(int udpsockfd, const char* my_ip){
+    char buffer[BUFFER_SIZE];
+    struct in_addr senderaddr;
+
+    ssize_t answer = recvfrom(udpsockfd, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr*) &senderaddr, sizeof(senderaddr));
+    
+    if(answer = -1) return -1; // error
+
+    // busca substr 
+    if(strstr(buffer, my_ip) != NULL) return 1; // soy yo mismo 
+
+    // hay un nodo vivo
+    // fc_juani(buffer, buffersize, c&senderaddr)
+
+    return 0;
+}

@@ -34,25 +34,26 @@ int make_socket_non_blocking(int sockfd);
  * This function performs the EPOLL_CTL_ADD control operation on the 
  * epoll instance. It tells the kernel to monitor the target_fd for 
  * the events specified in the event mask (e.g., EPOLLIN).
- * * @param epoll_fd The file descriptor of the epoll instance.
- * @param target_fd The file descriptor of the socket to be monitored.
+ * * @param epollfd The file descriptor of the epoll instance.
+ * @param targetfd The file descriptor of the socket to be monitored.
  * @param events The bit mask specifying the events of interest.
  * @return 0 on success, or -1 on error.
  */
-int add_to_epoll_interest_list(int epoll_fd, int target_fd, uint32_t events);
+int add_to_epoll_interest_list(int epollfd, int targetfd, uint32_t events);
 
 /**
- * @brief Creates a connectionless datagram socket and binds it to a specified port.
- * * Reference: man 2 socket, man 2 bind, man 7 udp.    
+ * @brief Creates a dual-purpose UDP socket for listening and broadcasting.
+ * * Reference: man 2 socket, man 2 bind, man 7 udp, man 7 socket.
  * This function creates an IPv4 (AF_INET), UDP (SOCK_DGRAM) socket. 
- * It sets the SO_REUSEADDR option to allow immediate port reuse and binds 
- * the socket to all available network interfaces (INADDR_ANY). 
- * Unlike TCP, this socket does not require listen() or accept() and is 
- * immediately ready to receive datagrams using recvfrom().
- * * @param port The port number to bind the listening UDP socket.
+ * It sets the SO_REUSEADDR option to allow immediate port reuse. 
+ * Crucially, it also enables the SO_BROADCAST option, allowing this exact 
+ * same file descriptor to transmit broadcast messages (e.g., ANNOUNCE) 
+ * to the entire subnet. Finally, it binds the socket to all available 
+ * network interfaces (INADDR_ANY).
+ * * @param port The port number to bind the UDP socket.
  * @return The file descriptor referencing the socket, or -1 on error.
  */
-int create_udp_listener(int port);
+int create_udp_listener_broadcaster(int port);
 
 /**
  * @brief Transmits a UDP broadcast message to the entire local network.
@@ -61,18 +62,25 @@ int create_udp_listener(int port);
  * address (INADDR_BROADCAST / 255.255.255.255). The underlying socket MUST have 
  * the SO_BROADCAST option enabled via setsockopt() before calling this function, 
  * otherwise the kernel will reject the transmission with an EACCES error.
- * * @param sock_fd      A valid UDP socket file descriptor with SO_BROADCAST enabled.
- * @param target_port  The destination port where other agents are listening for UDP.
+ * * @param sockfd      A valid UDP socket file descriptor with SO_BROADCAST enabled.
+ * @param targetport  The destination port where other agents are listening for UDP.
  * @param message      The null-terminated string to be broadcasted (e.g., "ANNOUNCE").
  * @return The number of bytes sent on success, or -1 on error.
  */
-ssize_t broadcast_announce(int sock_fd, int target_port, const char *message);
+ssize_t broadcast_announce(int sockfd, int targetport, const char *message);
+// ssize devuelve es justamente eso o los bytes enviados o -1
 
 /**
- * @brief Enables the broadcast flag on a given socket.
- * * @param sock_fd The file descriptor of the socket to configure.
- * @return 0 on success, or -1 on error.
+ * @brief Processes an incoming discovery datagram and updates the live nodes table.
+ * * Reference: man 2 recvfrom, man 3 inet_ntoa.
+ * This function is invoked when the epoll loop detects incoming data on the 
+ * UDP socket. It uses recvfrom() to read the payload and extract the sender's 
+ * IP address. It implements echo-filtering by comparing the incoming payload 
+ * against its own node ID. Valid nodes are added or updated in the internal registry.
+ * * @param udp_sockfd The file descriptor of the UDP socket.
+ * @param my_node_id The string identifier of this node (used to ignore self-echoes).
+ * @return 0 on success, 1 if the message was a self-echo (ignored), or -1 on error.
  */
-int enable_socket_broadcast(int sock_fd);
+int process_discovery_datagram(int udpsockfd, const char* mynodeid);
 
 #endif
