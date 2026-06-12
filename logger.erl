@@ -1,2 +1,0 @@
--module(logger).
--include("header.hrl").
