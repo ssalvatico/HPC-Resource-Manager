@@ -1,6 +1,6 @@
 -module(event_logger).
 -include("header.hrl").
--export([init/1, init/0]).
+-export([init/1, init/0, log_event/5]).
 
 init() ->
   {ok,  Fd} = file:open("event_logger.txt",[raw, append, {encoding, "utf-8"}]),
@@ -12,3 +12,12 @@ init(Fd) ->
         file:write(Fd, LogMsg)
   end,
   init(Fd).
+
+log_event(ServLoggerId, Status, SrcMethod, Detail, JobInvolved) ->
+    ServLoggerId ! #logInfo{status = Status,
+                            src_method = SrcMethod,
+                            detail = Detail,
+                            job_involved = JobInvolved,
+                            timestamp = ?TIMESTAMP
+                        },
+    ok.

@@ -1,5 +1,6 @@
 -module(erlang_c_bridge).
 -include("header.hrl").
+-import(event_logger, [log_event/5]).
 -export([init/0, conn_handler/3, sender/3, receiver/3]).
 
 %%% Connect tiene la responsabilidad de conectarse al agente C
@@ -74,13 +75,4 @@ init() ->
     log_event(ServLoggerId, ok, {?MODULE, ?FUNCTION_NAME}, initialization, self()),
     JobSchedulerId = spawn(job_scheduler, init, []),
     connect(ServLoggerId, ?TRIES, JobSchedulerId).
-
-log_event(ServLoggerId, Status, SrcMethod, Detail, JobInvolved) ->
-    ServLoggerId ! #logInfo{status = Status,
-                            src_method = SrcMethod,
-                            detail = Detail,
-                            job_involved = JobInvolved,
-                            timestamp = ?TIMESTAMP
-                        },
-    ok.
 
