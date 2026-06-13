@@ -10,8 +10,8 @@
 %%% exitosa. En caso de error, notifica al logger y termina.
 
 connect(ServLoggerId, 0, JobSchedulerId) ->
-    log_event(ServLoggerId, error, {?MODULE, ?FUNCTION_NAME}, "Out of retries", none),
-    JobSchedulerId ! {error, "Out of retries"};
+    log_event(ServLoggerId, error, {?MODULE, ?FUNCTION_NAME}, "Out of tries", none),
+    JobSchedulerId ! {error, "Out of tries"};
 
 connect(ServLoggerId, Nth_try, JobSchedulerId) ->
     case gen_tcp:connect(?HOST , ?PORT , [binary, {active, false}] , ?TIMEOUT) of
@@ -71,14 +71,16 @@ sender(ServLoggerId, Socket, JobSchedulerId) ->
 
 init() -> 
     ServLoggerId = spawn(event_logger, init, []),
-    JobSchedulerId = spawn(job_scheduler, init, []),
-    connect(ServLoggerId, ?TRIES, JobSchedulerId).
+    log_event(ServLoggerId, ok, {?MODULE, ?FUNCTION_NAME}, initialization, self()),
+    % JobSchedulerId = spawn(job_scheduler, init, []),
+    connect(ServLoggerId, ?TRIES, self()).
 
 log_event(ServLoggerId, Status, SrcMethod, Detail, JobInvolved) ->
     ServLoggerId ! #logInfo{status = Status,
-                              src_method = SrcMethod,
-                              detail = Detail,
-                              job_involved = JobInvolved,
-                              timestamp = ?TIMESTAMP},
+                            src_method = SrcMethod,
+                            detail = Detail,
+                            job_involved = JobInvolved,
+                            timestamp = ?TIMESTAMP
+                        },
     ok.
-    
+
