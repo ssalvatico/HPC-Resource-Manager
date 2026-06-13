@@ -9,22 +9,20 @@ init(State) ->
   receive
     {receiver_pid, ReceiverId} ->
       State1 = maps:put(receiver_pid, ReceiverId, State),
-      erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] receiver_pid received", none),
+      %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] receiver_pid received", none),
       io:fwrite("[job_scheduler] receiver_pid received ~n"),
       init(State1);
     {sender_pid, SenderId} ->
       State1 = maps:put(sender_pid, SenderId, State),
       SenderId ! {get_nodes},
-      erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] sender received", none),
+      %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] sender received", none),
       io:fwrite("[job_scheduler] sender_pid received~n"),
       init(State1);
     {packet_received, Packet} ->
-      NodeList = get_node_list(Packet),
-      erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] node list", none),
-      io:fwrite("[job_scheduler] node list ~p ~n", [NodeList]);
-
+      handle_packet(Packet);
+      %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] node list", none),
     {ok, get_nodes} ->
-      erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] get_nodes sent succesfully", none),
+      %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] get_nodes sent succesfully", none),
       io:fwrite("[job_scheduler] get_nodes sent successfully~n"),
       init(State)
   end.
