@@ -8,7 +8,7 @@ init() ->
 init(Fd) ->
   receive
     #logInfo{status = S, src_method = M, detail = D, job_involved = J, timestamp = T} ->
-      LogMsg = unicode:characters_to_binary(  io_lib:format("~p ~p ~p ~p ~p~n", [S,M,D,J,T])  ),
+      LogMsg = unicode:characters_to_binary(  io_lib:format("~w ~w ~p ~w ~w~n", [S,M,D,J,T])  ),
         file:write(Fd, LogMsg)
   end,
   init(Fd).
