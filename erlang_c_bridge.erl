@@ -72,8 +72,8 @@ sender(ServLoggerId, Socket, JobSchedulerId) ->
 init() -> 
     ServLoggerId = spawn(event_logger, init, []),
     log_event(ServLoggerId, ok, {?MODULE, ?FUNCTION_NAME}, initialization, self()),
-    % JobSchedulerId = spawn(job_scheduler, init, []),
-    connect(ServLoggerId, ?TRIES, self()).
+    JobSchedulerId = spawn(job_scheduler, init, []),
+    connect(ServLoggerId, ?TRIES, JobSchedulerId).
 
 log_event(ServLoggerId, Status, SrcMethod, Detail, JobInvolved) ->
     ServLoggerId ! #logInfo{status = Status,
