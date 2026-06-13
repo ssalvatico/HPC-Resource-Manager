@@ -140,4 +140,37 @@ int process_discovery_datagram(int udpsockfd, const char* my_ip){
     // fc_juani(buffer, buffersize, c&senderaddr)
 
     return 0;
+
+}
+
+int connect_to_tcp_node(const char* target_ip, int target_port) {
+    int sockfd;
+    struct sockaddr_in remote_addr;
+
+    // 1. create socket
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd == -1) {
+        return -1;
+    }
+
+    // 2. config socket
+    memset(&remote_addr, 0, sizeof(remote_addr));
+    remote_addr.sin_family = AF_INET;
+    remote_addr.sin_port = htons(target_port);
+    remote_addr.sin_addr.s_addr = inet_addr(target_ip);
+
+    // 3. connect socket
+    if (connect(sockfd, (struct sockaddr*)&remote_addr, sizeof(remote_addr)) < 0) {
+        close(sockfd);
+        return -1;
+    }
+
+    return sockfd;
+}
+
+// the same for all tcp messages using an already connected socket
+int send_tcp_message(int sockfd, const char* message) {
+    // Don't generate a SIGPIPE signal if the peer on a tcp socket has closed the connection
+    int bytes = send(sockfd, message, strlen(message), MSG_NOSIGNAL);
+    return bytes;
 }
