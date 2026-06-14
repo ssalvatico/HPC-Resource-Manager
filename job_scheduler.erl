@@ -22,7 +22,12 @@ init(State) ->
     {packet_received, Packet} ->
       case handle_packet(Packet) of 
         {node_records, NodeRecordList} ->
-          
+          JobId = erlang:unique_integer([positive]),
+          JobRequest = generate_job_request(JobId, NodeRecordList),
+          io:fwrite("Job Request: ~p ~n", [JobRequest]),
+          SenderId = maps:get(sender_pid, State),
+          SenderId ! {job_directive, JobId, JobRequest},
+          init(State#{JobId => pending})
 
       end;
       %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] node list", none),
@@ -79,6 +84,62 @@ assign_resource({"mem", Amount}, NodeRecord) ->
     NodeRecord#node{mem = Amount}.
 
 
-%%
+%% Auxiliar functions to generate a JOB_REQUEST
+
+generate_job_request(JobId, NodeRecordList) ->
+  %1. Choose how many nodes we use.
+  N = rand:uniform(length(NodeRecordList)),
+  %2. Pick N random nodes
+  SelectedNodes = pick_random(N, NodeRecordList),
+  %3. Pick random resources from SelectNodes
+  % i.e [{"192.168.1.1",[{cpu,2}, {mem,100}]}, {"192.168.1.2", [{gpu,1}]} ]
+  AvailableResources = lists:flatten(lists:filtermap(fun(SelectedNode) -> pick_resources(SelectedNode) end, SelectedNodes)),
+  % i.e JOB REQUEST 1001 @192.168.1.2:cpu:2 @192.168.1.3:gpu:1
+  JobRequest = "JOB REQUEST " ++ integer_to_list(JobId),
+  lists:foldl(fun build_job_request/2, JobRequest, AvailableResources).
+
+shuffle(NodeRecordList) ->
+  % 1. Pair each element with a random float number 
+  Pairs = [{rand:uniform(), X} || X <- NodeRecordList],
+    
+  % 2. Sort the pairs by their random float key
+  SortedPairs = lists:keysort(1, Pairs),
+    
+  % 3. Extract the original elements back into a flat list
+  [X || {_, X} <- SortedPairs].
+
+pick_random(N, NodeRecordList) ->
+  ShuffleList = shuffle(NodeRecordList),
+  lists:sublist(ShuffleList, N).
+
+pick_resources(SelectedNode) ->
+  NodeResources = [{cpu, SelectedNode#node.cpu}, {mem, SelectedNode#node.mem}, {gpu, SelectedNode#node.gpu}],
+  % Only consider available resources per Node
+  AvailableResources = lists:filter(fun ({_, undefined}) -> false;
+                                        ({_, _}) -> true end, NodeResources),
+  case AvailableResources of
+    [] -> false;
+    _ ->
+      % Choose how many resources pick
+      N = rand:uniform(length(AvailableResources)),
+      % shuffle and take N
+      Shuffled = shuffle(AvailableResources),
+      Selected = lists:sublist(Shuffled, N),
+      % For each resource, pick an amount in range
+      Resources = lists:map(fun({Res, Max}) ->
+                              Amount = rand:uniform(Max),
+                              % {cpu, 4}
+                              {Res, Amount}
+                            end, Selected),
+      {true, {SelectedNode#node.ip, Resources}}
+  end.
+
+% i.e JOB REQUEST 1001 @192.168.1.2:cpu:2 @192.168.1.3:gpu:1
+% i.e Resources = [{cpu,2}, {mem,100}]
+build_job_request({Ip, Resources}, Acc) ->
+  ResourceString = lists:foldl(fun({Name, Amount}, Acc) -> Acc ++ ":" ++ atom_to_list(Name) ++ ":" ++ integer_to_list(Amount) end, "", Resources),
+  Acc ++ " @" ++ Ip  ++ ResourceString.
+
+                                  
 
 
