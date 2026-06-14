@@ -15,12 +15,16 @@ init(State) ->
       init(State1);
     {sender_pid, SenderId} ->
       State1 = maps:put(sender_pid, SenderId, State),
-      SenderId ! {get_nodes},
+      spawn(fun() -> request_nodes(SenderId) end),
       %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] sender received", none),
       io:fwrite("[job_scheduler] sender_pid received~n"),
       init(State1);
     {packet_received, Packet} ->
-      handle_packet(Packet);
+      case handle_packet(Packet) of 
+        {node_records, NodeRecordList} ->
+          
+
+      end;
       %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] node list", none),
     {ok, get_nodes} ->
       %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] get_nodes sent succesfully", none),
@@ -28,16 +32,16 @@ init(State) ->
       init(State)
   end.
 
-get_node_list(Packet) ->
-  String = binary:bin_to_list(Packet),
-  TrimedString = string:trim(String),
-  string:split(TrimedString, ";", all).
-
+request_nodes(SenderId) ->
+  timer:sleep(5000),
+  SenderId ! {get_nodes},
+  request_nodes(SenderId).
 
 handle_packet(<<"NODES ", Rest/binary>>) ->
     NodeList = get_node_list(Rest),
     NodeRecordList = lists:map(fun get_node/1, NodeList),
-    io:fwrite("Node Record List ~p ~n", [NodeRecordList]);
+    io:fwrite("Node Record List ~p ~n", [NodeRecordList]),
+    {node_records, NodeRecordList};
   
 handle_packet(<<"JOB_GRANTED ", Rest/binary>>) ->
     ok;
@@ -48,17 +52,18 @@ handle_packet(<<"JOB_DENIED ", Rest/binary>>) ->
 handle_packet(<<"JOB_TIMEOUT ", Rest/binary>>) ->
     ok.
 
-
+get_node_list(Packet) ->
+  String = binary:bin_to_list(Packet),
+  TrimedString = string:trim(String),
+  string:split(TrimedString, ";", all).
 
 %% Auxiliar Functions to get resources from each Node.
 
 get_node(Node) ->
-    NodeRecord = #node{},
     [Ip, Port | Resources] = string:split(Node, ":", all),
     % [{"cpu", 4}, {"gpu", 10}]
     ResourcePairs = to_pairs(Resources),
-    NodeRecord2 = lists:foldl(fun assign_resource/2 ,NodeRecord,ResourcePairs),
-    NodeRecord2#node{ip = Ip, port = Port}.
+    lists:foldl(fun assign_resource/2 ,#node{ip = Ip, port = Port} ,ResourcePairs).
 
     
 to_pairs([Key, Value | Rest]) ->
