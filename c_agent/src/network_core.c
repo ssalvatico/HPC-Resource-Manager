@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <string.h>
+#include <errno.h>
 
 #define LISTEN_BACKLOG 10
 #define BUFFER_SIZE 256
@@ -71,13 +72,17 @@ int connect_to_tcp_node(const char* target_ip, int target_port) {
     if (sockfd == -1) {
         return -1;
     }
-    
+
     // 2. config socket
     memset(&remote_addr, 0, sizeof(remote_addr));
     remote_addr.sin_family = AF_INET;
     remote_addr.sin_port = htons(target_port);
     remote_addr.sin_addr.s_addr = inet_addr(target_ip);
     
+    // make socket non blocking
+    int flags = fcntl(sockfd, F_GETFL, 0);
+    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+
     // 3. connect socket
     if (connect(sockfd, (struct sockaddr*)&remote_addr, sizeof(remote_addr)) < 0) {
         close(sockfd);
@@ -104,7 +109,11 @@ int accept_tcp_connection(int server_fd, char* client_ip_buffer) {
         strcpy(client_ip_buffer, ip_string);
     }
 
-    // 3. return client fd
+    // make socket non blocking
+    int flags = fcntl(client_fd, F_GETFL, 0);
+    fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+
+    // 4. return client fd
     return client_fd;
 }
 // the same for all tcp messages using an already connected socket
@@ -114,13 +123,20 @@ int send_tcp_message(int sockfd, const char* message) {
     return bytes;
 }
 
-// REVISAR
 ssize_t receive_tcp_message(int sockfd, char* buffer, size_t buffer_size){
-    ssize_t bytes = recv(sockfd, buffer, buffer_size, 0);
-    if (bytes == -1) return -1;
-    if (bytes == 0 ) return 0;
+    ssize_t bytes = recv(sockfd, buffer, buffer_size - 1, 0); // Dejamos 1 byte para el \0
+    if (bytes == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return 0; // No new data return to epoll
+        }
+        return -1; 
+    }
+    if (bytes == 0 ) return 0; 
+    
+    buffer[bytes] = '\0'; 
     return bytes;
 }
+
 int create_udp_listener_broadcaster(int port) {
     int sockfd;
     struct sockaddr_in server_addr;
@@ -152,6 +168,10 @@ int create_udp_listener_broadcaster(int port) {
         return -1;
     }
     
+    // make socket non blocking
+    int flags = fcntl(sockfd, F_GETFL, 0);
+    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+    
     return sockfd;
 }
 
@@ -170,7 +190,7 @@ int process_discovery_datagram(int udpsockfd, const char* my_ip){
     char buffer[BUFFER_SIZE];
     struct in_addr senderaddr;
     socklen_t addr_len = sizeof(senderaddr);
-    ssize_t answer = recvfrom(udpsockfd, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr*) &senderaddr, &senderaddr);
+    ssize_t answer = recvfrom(udpsockfd, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr*) &senderaddr, &addr_len);
     
     if(answer == -1) return -1; // error
     
@@ -191,4 +211,10 @@ int add_to_epoll_interest_list(int epoll_fd, int target_fd, uint32_t events){
     if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, target_fd, &event) == -1) return -1;
 
     return 0;
+}
+
+int remove_from_epoll_interest_list(int epoll_fd, int target_fd){
+    struct epoll_event event;
+    event.data.fd = target_fd;
+    return epoll_ctl(epoll_fd, EPOLL_CTL_DEL, target_fd, &event);
 }
