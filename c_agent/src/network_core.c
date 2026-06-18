@@ -11,11 +11,10 @@
 #define LISTEN_BACKLOG 10
 #define BUFFER_SIZE 256
 
-// por ahora es bloqueante y atiende a cualquier ip que se quiera conectar al puerto especificado
 int create_tcp_listener(int port){
     int sockfd;
     struct sockaddr_in server_addr;
-    
+    socklen_t addrlen = sizeof(server_addr);
     // 1. Create socket, 
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if(sockfd == -1) return-1;
@@ -34,7 +33,7 @@ int create_tcp_listener(int port){
     server_addr.sin_addr.s_addr = INADDR_ANY;   // addr to listen
     
     // 3. bind socket 
-    if(bind(sockfd, (struct sockaddr*) &server_addr, sizeof(server_addr))){
+    if(bind(sockfd, (struct sockaddr*) &server_addr, addrlen)){
         close(sockfd);
         return -1;
     }
@@ -45,9 +44,7 @@ int create_tcp_listener(int port){
         return -1;
     }
     
-    return sockfd;
-}
-int make_socket_non_blocking(int sockfd){
+    // MAKE SOCKET NON BLOCKING
     // get current flags
     int flags = fcntl(sockfd, F_GETFL, 0);
     if(flags == -1) {
@@ -61,9 +58,10 @@ int make_socket_non_blocking(int sockfd){
         close(sockfd);
         return -1;
     };
-    
-    return 0;
+
+    return sockfd;
 }
+
 int connect_to_tcp_node(const char* target_ip, int target_port) {
     int sockfd;
     struct sockaddr_in remote_addr;
@@ -129,9 +127,7 @@ int create_udp_listener_broadcaster(int port) {
 
     // 1. create socket
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd == -1) {
-        return -1;
-    }
+    if (sockfd == -1)return -1;
     
     // 2. config socket
     int optval = 1; // 1 = Activado
@@ -165,7 +161,7 @@ ssize_t broadcast_announce(int sockfd, int targetport, const char *message){
     memset(&destaddr, 0, sizeof(destaddr));
     destaddr.sin_family = AF_INET;
     destaddr.sin_addr.s_addr = INADDR_BROADCAST; // todas las computadoras conectadas a la red local
-    destaddr.sin_port = (targetport);
+    destaddr.sin_port = htons(targetport);
     // 2. send
     return sendto(sockfd, message, strlen(message), 0,(struct sockaddr*)&destaddr, sizeof(destaddr));
 }
@@ -173,8 +169,8 @@ ssize_t broadcast_announce(int sockfd, int targetport, const char *message){
 int process_discovery_datagram(int udpsockfd, const char* my_ip){
     char buffer[BUFFER_SIZE];
     struct in_addr senderaddr;
-    
-    ssize_t answer = recvfrom(udpsockfd, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr*) &senderaddr, (socklen_t*)sizeof(buffer));
+    socklen_t addr_len = sizeof(senderaddr);
+    ssize_t answer = recvfrom(udpsockfd, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr*) &senderaddr, &senderaddr);
     
     if(answer == -1) return -1; // error
     
