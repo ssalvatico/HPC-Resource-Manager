@@ -6,7 +6,7 @@
 -define(TIMESTAMP, calendar:local_time()).
 
 -define(TIMEOUT, 5000).
--define(WORK_TIME, 1000).
+-define(WORK_TIME, 15000).
 
 -define(RES_ORDER(Type),
     case Type of
