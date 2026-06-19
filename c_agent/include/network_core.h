@@ -5,28 +5,20 @@
 #include <stdint.h>
 
 /**
- * @brief Creates an endpoint for communication and binds it to a specified port.
- * * Reference: man 2 socket, man 2 bind, man 2 listen.
+ * @brief Creates a non blocking TCP listening socket bound to 
+ * the specified port and ip address. 
+ * * Reference: man 2 socket, man 2 bind, man 2 listen, man 2 fcntl.
  * This function creates an IPv4 (AF_INET), TCP (SOCK_STREAM) socket, 
  * sets the SO_REUSEADDR option to prevent "Address already in use" errors, 
  * binds it to INADDR_ANY, and marks it as a passive socket that will be used 
- * to accept incoming connection requests using listen().
+ * to accept incoming connection requests using listen(). Then appending 
+ * O_NONBLOCK to the socket flags ensures that operations like accept() or recv()
+ * return with EAGAIN or EWOULDBLOCK instead of suspending the execution of the thread
  * * @param port The port number to bind the listening socket.
  * @return The file descriptor referencing the socket, or -1 on error.
  */
-int create_tcp_listener(int port);
+int create_tcp_listener(const char* ip_address, int port);
 
-/**
- * @brief Manipulates the file descriptor to enable non-blocking I/O.
- * * Reference: man 2 fcntl.
- * This function retrieves the current file status flags using F_GETFL 
- * and appends the O_NONBLOCK flag using F_SETFL. This ensures that operations 
- * like accept() or recv() return immediately with EAGAIN or EWOULDBLOCK 
- * instead of suspending the execution of the thread.
- * * @param sockfd The file descriptor of the socket to modify.
- * @return 0 on success, or -1 on error.
- */
-int make_socket_non_blocking(int sockfd);
 /**
  * @brief Actively connects to a remote TCP server.
  * * Reference: man 2 socket, man 2 connect.
@@ -39,6 +31,19 @@ int make_socket_non_blocking(int sockfd);
  * @return The new file descriptor of the active connection, or -1 on error.
  */
 int connect_to_tcp_node(const char* target_ip, int target_port);
+/**
+ * @brief Accepts a new incoming TCP connection and extracts the client's IP.
+ * * Reference: man 2 accept, man 3 inet_ntoa.
+ * This function is called when the epoll loop detects an EPOLLIN event 
+ * on the listening TCP socket. It accepts the connection and retrieves 
+ * the client's IPv4 address as a string. The newly created client socket 
+ * should then be made non-blocking and added to the epoll interest list.
+ * * @param server_fd The file descriptor of the listening TCP socket.
+ * @param client_ip_buffer A buffer where the client's IP address will be stored 
+ * (must be at least INET_ADDRSTRLEN bytes long).
+ * @return The file descriptor of the new client socket, or -1 on error.
+ */
+int accept_tcp_connection(int server_fd, char* client_ip_buffer);
 
 /**
  * @brief Sends a null-terminated string message through an open TCP socket.
@@ -53,6 +58,19 @@ int connect_to_tcp_node(const char* target_ip, int target_port);
 int send_tcp_message(int sockfd, const char* message);
 
 /**
+ * @brief Safely reads data from a non-blocking TCP socket.
+ * * Reference: man 2 recv.
+ * This function reads incoming data from a connected client socket 
+ * into the provided buffer. Since the socket is non-blocking, it handles 
+ * reading available bytes without suspending thread execution.
+ * * @param sockfd The file descriptor of the connected client socket.
+ * @param buffer The character array where the read data will be stored.
+ * @param buffer_size The maximum capacity of the provided buffer.
+ * @return The number of bytes read, 0 if the client gracefully closed the connection, 
+ * or -1 on error (errno should be checked for EAGAIN/EWOULDBLOCK).
+ */
+ssize_t receive_tcp_message(int sockfd, char* buffer, size_t buffer_size);
+/**
  * @brief Creates a dual-purpose UDP socket for listening and broadcasting.
  * * Reference: man 2 socket, man 2 bind, man 7 udp, man 7 socket.
  * This function creates an IPv4 (AF_INET), UDP (SOCK_DGRAM) socket. 
@@ -65,7 +83,6 @@ int send_tcp_message(int sockfd, const char* message);
  * @return The file descriptor referencing the socket, or -1 on error.
  */
 int create_udp_listener_broadcaster(int port);
-
 /**
  * @brief Transmits a UDP broadcast message to the entire local network.
  * * Reference: man 2 sendto, man 7 socket.
@@ -80,7 +97,6 @@ int create_udp_listener_broadcaster(int port);
  */
 ssize_t broadcast_announce(int sockfd, int targetport, const char *message);
 // ssize devuelve es justamente eso o los bytes enviados o -1
-
 /**
  * @brief Processes an incoming discovery datagram and updates the live nodes table.
  * * Reference: man 2 recvfrom, man 3 inet_ntoa.
@@ -92,9 +108,7 @@ ssize_t broadcast_announce(int sockfd, int targetport, const char *message);
  * @param my_node_id The string identifier of this node (used to ignore self-echoes).
  * @return 0 on success, 1 if the message was a self-echo (ignored), or -1 on error.
  */
-int process_discovery_datagram(int udpsockfd, const char* mynodeid);
-
-
+int process_discovery_datagram(int udpsockfd, char* buffer, const int BUFFER_SIZE);
 /**
  * @brief Adds a file descriptor to the epoll interest list.
  * * Reference: man 2 epoll_ctl.
@@ -107,5 +121,17 @@ int process_discovery_datagram(int udpsockfd, const char* mynodeid);
  * @return 0 on success, or -1 on error.
  */
 int add_to_epoll_interest_list(int epollfd, int targetfd, uint32_t events);
+/**
+ * @brief Removes a file descriptor from the epoll monitoring list.
+ * * Reference: man 2 epoll_ctl.
+ * This function performs the EPOLL_CTL_DEL control operation. It tells 
+ * the kernel to stop monitoring the target_fd. This function should generally 
+ * be called before close(target_fd) when a client disconnects to prevent 
+ * resource leaks or phantom events in the epoll loop.
+ * * @param epoll_fd The file descriptor of the central epoll instance.
+ * @param target_fd The file descriptor of the socket to be removed.
+ * @return 0 on success, or -1 on error.
+ */
+int remove_from_epoll_interest_list(int epoll_fd, int target_fd);
 
 #endif

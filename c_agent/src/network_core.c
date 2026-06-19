@@ -10,9 +10,8 @@
 #include <errno.h>
 
 #define LISTEN_BACKLOG 10
-#define BUFFER_SIZE 256
 
-int create_tcp_listener(int port){
+int create_tcp_listener(const char* ip_address, int port){
     int sockfd;
     struct sockaddr_in server_addr;
     socklen_t addrlen = sizeof(server_addr);
@@ -31,7 +30,7 @@ int create_tcp_listener(int port){
     
     server_addr.sin_family = AF_INET;           // IPV4           
     server_addr.sin_port = htons(port);         // host to network short (port)
-    server_addr.sin_addr.s_addr = INADDR_ANY;   // addr to listen
+    server_addr.sin_addr.s_addr = inet_addr(ip_address);   // addr to listen
     
     // 3. bind socket 
     if(bind(sockfd, (struct sockaddr*) &server_addr, addrlen)){
@@ -73,24 +72,30 @@ int connect_to_tcp_node(const char* target_ip, int target_port) {
         return -1;
     }
 
+    // make socket non blocking
+    int flags = fcntl(sockfd, F_GETFL, 0);
+    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+
     // 2. config socket
     memset(&remote_addr, 0, sizeof(remote_addr));
     remote_addr.sin_family = AF_INET;
     remote_addr.sin_port = htons(target_port);
     remote_addr.sin_addr.s_addr = inet_addr(target_ip);
     
-    // make socket non blocking
-    int flags = fcntl(sockfd, F_GETFL, 0);
-    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 
-    // 3. connect socket
+    // 3. connect socket puede interrumpirse el connect?
     if (connect(sockfd, (struct sockaddr*)&remote_addr, sizeof(remote_addr)) < 0) {
-        close(sockfd);
-        return -1;
+        // non blocking socket return -1 and set errno to EINPROGRESS socket still connectig
+        if(errno != EINPROGRESS){
+            close(sockfd);
+            return -1;
+        }
+        return sockfd; // socket still connecting
     }
     
     return sockfd;
 }
+
 int accept_tcp_connection(int server_fd, char* client_ip_buffer) {
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
@@ -127,7 +132,7 @@ ssize_t receive_tcp_message(int sockfd, char* buffer, size_t buffer_size){
     ssize_t bytes = recv(sockfd, buffer, buffer_size - 1, 0); // Dejamos 1 byte para el \0
     if (bytes == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return 0; // No new data return to epoll
+            return -2; // No new data return to epoll, still waiting please
         }
         return -1; 
     }
@@ -186,23 +191,17 @@ ssize_t broadcast_announce(int sockfd, int targetport, const char *message){
     return sendto(sockfd, message, strlen(message), 0,(struct sockaddr*)&destaddr, sizeof(destaddr));
 }
 
-int process_discovery_datagram(int udpsockfd, const char* my_ip){
-    char buffer[BUFFER_SIZE];
-    struct in_addr senderaddr;
+int process_discovery_datagram(int udpsockfd, char* buffer, const int BUFFER_SIZE){
+    struct sockaddr senderaddr;
     socklen_t addr_len = sizeof(senderaddr);
     ssize_t answer = recvfrom(udpsockfd, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr*) &senderaddr, &addr_len);
     
     if(answer == -1) return -1; // error
-    
-    // busca substr 
-    if(strstr(buffer, my_ip) != NULL) return 1; // soy yo mismo 
-    
-    // hay un nodo vivo
-    // fc_juani(buffer, buffersize, c&senderaddr)
 
     return 0;
 
 }
+
 int add_to_epoll_interest_list(int epoll_fd, int target_fd, uint32_t events){
     struct epoll_event event;
     event.data.fd = target_fd;
