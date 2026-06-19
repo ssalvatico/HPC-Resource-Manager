@@ -28,6 +28,7 @@ conn_handler(Socket, JobSchedulerId) ->
     ReceiverId = spawn(?MODULE, receiver, [Socket, JobSchedulerId]),
     SenderId = spawn(?MODULE, sender, [Socket, JobSchedulerId]),
     JobSchedulerId ! {receiver_pid, ReceiverId},
+    JobSchedulerId ! {logger_id, ServLoggerId},
     JobSchedulerId ! {sender_pid, SenderId}.
 
 %%% Listens on Socket for incoming responses from the C agent.
