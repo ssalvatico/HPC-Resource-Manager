@@ -1,18 +1,18 @@
 -module(erlang_c_bridge).
 -include("header.hrl").
 -import(event_logger, [log_event/4]).
--export([init/0, conn_handler/2, sender/2, receiver/2, connect/2]).
+-export([init/0, init/1, conn_handler/2, sender/2, receiver/2, connect/3]).
 
 %%% Attempts to establish a TCP connection to the C agent at ?HOST:?PORT.
 %%% Retries up to Nth_try times on failure. On success, spawns conn_handler.
 %%% Nth_try (remaining attempts), JobSchedulerId (scheduler PID)
-connect(0, JobSchedulerId) ->
+connect(_Port, 0, JobSchedulerId) ->
     event_logger:log_event(close, {?MODULE, ?FUNCTION_NAME}, "Out of tries", none),
     JobSchedulerId ! {error, "Out of tries"},
     timer:sleep(500),
     erlang:halt();
-connect(Nth_try, JobSchedulerId) ->
-    case gen_tcp:connect(?HOST , ?PORT , [binary, {active, false}] , ?TIMEOUT) of
+connect(Port, Nth_try, JobSchedulerId) ->
+    case gen_tcp:connect(?HOST , Port , [binary, {active, false}] , ?TIMEOUT) of
         {ok, Socket} ->
             event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "Connection succesful", none),
             spawn(?MODULE, conn_handler, [Socket, JobSchedulerId]);
@@ -20,7 +20,7 @@ connect(Nth_try, JobSchedulerId) ->
         {error, Reason} -> 
             timer:sleep(?TIMEOUT),
             event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
-            connect(Nth_try - 1, JobSchedulerId)
+            connect(Port, Nth_try - 1, JobSchedulerId)
     end.
 %%% Spawns the sender and receiver processes, then notifies the scheduler
 %%% with their PIDs. Terminates after delegation.
@@ -28,7 +28,6 @@ conn_handler(Socket, JobSchedulerId) ->
     ReceiverId = spawn(?MODULE, receiver, [Socket, JobSchedulerId]),
     SenderId = spawn(?MODULE, sender, [Socket, JobSchedulerId]),
     JobSchedulerId ! {receiver_pid, ReceiverId},
-    JobSchedulerId ! {logger_id, ServLoggerId},
     JobSchedulerId ! {sender_pid, SenderId}.
 
 %%% Listens on Socket for incoming responses from the C agent.
@@ -83,5 +82,5 @@ init(Port) ->
     register(eventLoggerId, ServLoggerId),
     event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, initialization, self()),
     JobSchedulerId = spawn(job_scheduler, init, []),
-    connect(?TRIES, JobSchedulerId).
+    connect(Port, ?TRIES, JobSchedulerId).
 
