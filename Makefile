@@ -14,10 +14,9 @@ server.beam: header.hrl server.erl
 	erlc server.erl
 
 build: all
-	clear
 
 run:
-	erl -noshell -eval "erlang_c_bridge:init()" -s init stop
+	erl -noshell -eval "erlang_c_bridge:init()"
 	clear
 
 clear:

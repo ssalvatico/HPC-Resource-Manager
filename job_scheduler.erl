@@ -1,6 +1,6 @@
 -module(job_scheduler).
 -include("header.hrl").
--import(event_logger, [log_event/5]).
+-import(event_logger, [log_event/4]).
 -export([init/0, get_node_list/1]).
 
 init() ->
@@ -11,46 +11,52 @@ init(State) ->
   receive
     {receiver_pid, ReceiverId} ->
       State1 = maps:put(receiver_pid, ReceiverId, State),
-      %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] receiver_pid received", none),
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] receiver_pid received", none),
       io:fwrite("[job_scheduler] receiver_pid received ~n"),
       init(State1);
     {sender_pid, SenderId} ->
       State1 = maps:put(sender_pid, SenderId, State),
       spawn(fun() -> request_nodes(SenderId) end),
-      %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] sender received", none),
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] sender_pid received", none),
       io:fwrite("[job_scheduler] sender_pid received~n"),
       init(State1);
     {job_release, JobId} ->
       State1 = maps:remove(JobId, State),
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] releasing job", JobId),
       init(State1);
     {packet_received, Packet} ->
       case handle_packet(Packet) of 
+
         {node_records, NodeRecordList} ->
           JobId = erlang:unique_integer([positive]),
           {JobRequest, AvailableResources} = generate_job_request(JobId, NodeRecordList),
           io:fwrite("Job Request: ~p ~n", [JobRequest]),
+          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_request", JobId),
           SenderId = maps:get(sender_pid, State),
           SenderId ! {job_directive, JobId, JobRequest},
           init(State#{JobId => {pending, AvailableResources}});
         
         {job_granted, JobId} ->
           State1 = maps:update(JobId, fun update_job_state/2, State),
+          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_granted", JobId),
           spawn(fun () -> simulate_load(JobId, State1, self()) end),
           init(State1);
 
         {job_denied, JobId} ->
           State1 = maps:update(JobId, State),
+          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_denied", JobId),
           init(State1);
 
         {job_timeout, JobId} ->
           State1 = maps:remove(JobId, State),
+          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_timeout", JobId),
           init(State1);
 
         {skip, _} -> init(State)
       end;
-      %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] node list", none),
+      % event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] node list", none),
     {ok, get_nodes} ->
-      %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] get_nodes sent succesfully", none),
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] get_nodes sent succesfully", none),
       io:fwrite("[job_scheduler] get_nodes sent successfully~n"),
       init(State)
   end.
@@ -178,6 +184,3 @@ simulate_load(JobId, State1, InitPid) ->
   maps:get(sender_pid, State1) ! {job_directive, JobId, "JOB_RELEASE " ++ integer_to_list(JobId)},
   InitPid ! {job_release, JobId}.
 
-
-
-  
