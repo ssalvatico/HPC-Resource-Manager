@@ -179,8 +179,7 @@ update_job_state({_, _}, _) ->
   throw({invalid_state, "Invalid Job state transition"}).                          
 
 simulate_load(JobId, State1, InitPid) ->
-  timer:sleep(?WORK_TIME),
-  io:fwrite("About to release ~p ~n", [JobId]),
+  timer:sleep(rand:uniform(?WORK_TIME)),
   maps:get(sender_pid, State1) ! {job_directive, JobId, "JOB_RELEASE " ++ integer_to_list(JobId)},
   InitPid ! {job_release, JobId}.
 
