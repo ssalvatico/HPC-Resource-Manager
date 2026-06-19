@@ -6,6 +6,7 @@
 init() ->
   init(#{}).
 
+%% i.e State = #{sender_pid => Pid, receiver_pid => Pid, JobId1 => [Resources], JobId2 => ...}
 init(State) ->
   receive
     {receiver_pid, ReceiverId} ->
@@ -19,6 +20,9 @@ init(State) ->
       %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] sender received", none),
       io:fwrite("[job_scheduler] sender_pid received~n"),
       init(State1);
+    {job_release, JobId} ->
+      State1 = maps:remove(JobId, State),
+      init(State1);
     {packet_received, Packet} ->
       case handle_packet(Packet) of 
         {node_records, NodeRecordList} ->
@@ -30,18 +34,19 @@ init(State) ->
           init(State#{JobId => {pending, AvailableResources}});
         
         {job_granted, JobId} ->
-          State1 = maps:update(JobId, granted, State),
-          % Simulate doing something with the resources granted and RELEASE
+          State1 = maps:update(JobId, fun update_job_state/2, State),
+          spawn(fun () -> simulate_load(JobId, State1, self()) end),
           init(State1);
 
         {job_denied, JobId} ->
-          State1 = maps:update(JobId, denied, State),
+          State1 = maps:update(JobId, State),
           init(State1);
 
         {job_timeout, JobId} ->
-          State1 = maps:update(JobId, timeout, State),
-          init(State1)
+          State1 = maps:remove(JobId, State),
+          init(State1);
 
+        {skip, _} -> init(State)
       end;
       %% erlang_c_bridge:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] node list", none),
     {ok, get_nodes} ->
@@ -68,7 +73,12 @@ handle_packet(<<"JOB_DENIED ", Rest/binary>>) ->
     {job_denied, list_to_integer(string:trim(binary_to_list(Rest)))};
 
 handle_packet(<<"JOB_TIMEOUT ", Rest/binary>>) ->
-    {job_timeout, list_to_integer(string:trim(binary_to_list(Rest)))}.
+    {job_timeout, list_to_integer(string:trim(binary_to_list(Rest)))};
+
+handle_packet(_) ->
+    {skip, "Unknown packet"}.
+
+
 
 get_node_list(Packet) ->
   String = binary:bin_to_list(Packet),
@@ -153,6 +163,21 @@ build_job_request({Ip, Resources}, Acc) ->
   ResourceString = lists:foldl(fun({Name, Amount}, Acc) -> Acc ++ ":" ++ atom_to_list(Name) ++ ":" ++ integer_to_list(Amount) end, "", Resources),
   Acc ++ " @" ++ Ip  ++ ResourceString.
 
-                                  
+update_job_state({pending, AvailableResources}, granted) ->
+  {granted, AvailableResources};
+
+update_job_state({pending, AvailableResources}, denied) ->
+  {denied, AvailableResources};
+
+update_job_state({_, _}, _) ->
+  throw({invalid_state, "Invalid Job state transition"}).                          
+
+simulate_load(JobId, State1, InitPid) ->
+  timer:sleep(?WORK_TIME),
+  io:fwrite("About to release ~p ~n", [JobId]),
+  maps:get(sender_pid, State1) ! {job_directive, JobId, "JOB_RELEASE " ++ integer_to_list(JobId)},
+  InitPid ! {job_release, JobId}.
 
 
+
+  
