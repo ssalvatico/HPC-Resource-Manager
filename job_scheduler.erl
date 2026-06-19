@@ -1,6 +1,5 @@
 -module(job_scheduler).
 -include("header.hrl").
--import(event_logger, [log_event/4]).
 -export([init/0, get_node_list/1]).
 
 init() ->
@@ -24,21 +23,18 @@ init(State) ->
       init(State1);
     {packet_received, Packet} ->
       case handle_packet(Packet) of 
-
         {node_records, NodeRecordList} ->
           JobId = erlang:unique_integer([positive]),
           {JobRequest, AvailableResources} = generate_job_request(JobId, NodeRecordList),
           event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_request", JobId),
           SenderId = maps:get(sender_pid, State),
           SenderId ! {job_directive, JobId, JobRequest},
-          log(State, ok, {?MODULE, ?FUNCTION_NAME}, "JOB REQUEST sent", JobId),
           init(State#{JobId => {pending, AvailableResources}});
         
         {job_granted, JobId} ->
           State1 = maps:update(JobId, fun update_job_state/2, State),
           event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_granted", JobId),
           spawn(fun () -> simulate_load(JobId, State1, self()) end),
-          log(State, ok, {?MODULE, ?FUNCTION_NAME}, "JOB GRANTED", JobId),
           init(State1);
 
         {job_denied, JobId} ->
@@ -52,7 +48,7 @@ init(State) ->
           init(State1);
 
         {skip, _} -> 
-          log(State, error, {?MODULE, ?FUNCTION_NAME}, "unknown packet received", none),
+          event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "unknown packet received", none),
           init(State)
       end;
       % event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] node list", none),
@@ -178,10 +174,5 @@ simulate_load(JobId, State1, InitPid) ->
   maps:get(sender_pid, State1) ! {job_directive, JobId, "JOB_RELEASE " ++ integer_to_list(JobId)},
   InitPid ! {job_release, JobId}.
 
-log(State, Status, SrcMethod, Detail, JobInvolved) ->
-  case maps:get(logger_id, State, undefined) of
-    undefined -> ok;
-    ServLoggerId -> log_event(ServLoggerId, Status, SrcMethod, Detail, JobInvolved)
-  end.
 
   
