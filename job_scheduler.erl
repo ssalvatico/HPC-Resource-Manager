@@ -43,7 +43,7 @@ init(State) ->
           init(State1);
 
         {job_denied, JobId} ->
-          State1 = maps:update(JobId, State),
+          State1 = maps:remove(JobId, State),
           event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_denied", JobId),
           init(State1);
 
@@ -184,3 +184,5 @@ simulate_load(JobId, State1, InitPid) ->
   maps:get(sender_pid, State1) ! {job_directive, JobId, "JOB_RELEASE " ++ integer_to_list(JobId)},
   InitPid ! {job_release, JobId}.
 
+
+  
