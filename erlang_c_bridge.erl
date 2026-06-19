@@ -76,6 +76,9 @@ sender(Socket, JobSchedulerId) ->
 %%% Entry point. Spawns the logger and scheduler processes, then initiates
 %%% the TCP connection to the C agent.
 init() -> 
+    init(?PORT).
+
+init(Port) ->
     ServLoggerId = spawn(event_logger, init, []),
     register(eventLoggerId, ServLoggerId),
     event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, initialization, self()),
