@@ -20,11 +20,10 @@ init(Fd) ->
     init(Fd).
 
 %%% Builds a #logInfo{} record and sends it to the logger process.
-%%% Params: ServLoggerId (logger PID), Status (ok | error), 
-%%%         SrcMethod ({Module, Function}), Detail (atom | string), 
-%%%         JobInvolved (job_id | none)
+%%% Params: Status (ok | error), SrcMethod ({Module, Function}), 
+%%% Detail (atom | string), JobInvolved (job_id | none)
 log_event(Status, SrcMethod, Detail, JobInvolved) ->
-    servlogger ! #logInfo{status = Status,
+    eventLoggerId ! #logInfo{status = Status,
                             src_method = SrcMethod,
                             detail = Detail,
                             job_involved = JobInvolved,
