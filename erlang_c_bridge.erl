@@ -7,9 +7,10 @@
 %%% Retries up to Nth_try times on failure. On success, spawns conn_handler.
 %%% Nth_try (remaining attempts), JobSchedulerId (scheduler PID)
 connect(0, JobSchedulerId) ->
-    event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "Out of tries", none),
+    event_logger:log_event(close, {?MODULE, ?FUNCTION_NAME}, "Out of tries", none),
     JobSchedulerId ! {error, "Out of tries"},
-    init:stop();
+    timer:sleep(500),
+    erlang:halt();
 connect(Nth_try, JobSchedulerId) ->
     case gen_tcp:connect(?HOST , ?PORT , [binary, {active, false}] , ?TIMEOUT) of
         {ok, Socket} ->
@@ -17,8 +18,8 @@ connect(Nth_try, JobSchedulerId) ->
             spawn(?MODULE, conn_handler, [Socket, JobSchedulerId]);
     
         {error, Reason} -> 
-            event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
             timer:sleep(?TIMEOUT),
+            event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
             connect(Nth_try - 1, JobSchedulerId)
     end.
 %%% Spawns the sender and receiver processes, then notifies the scheduler
