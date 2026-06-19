@@ -1,6 +1,6 @@
 -module(event_logger).
 -include("header.hrl").
--export([init/1, init/0, log_event/5]).
+-export([init/1, init/0, log_event/4]).
 
 %%% Entry point. Opens the log file in append mode and delegates to init/1.
 %%% Creates event_logger.txt if it does not exist.
@@ -23,8 +23,8 @@ init(Fd) ->
 %%% Params: ServLoggerId (logger PID), Status (ok | error), 
 %%%         SrcMethod ({Module, Function}), Detail (atom | string), 
 %%%         JobInvolved (job_id | none)
-log_event(ServLoggerId, Status, SrcMethod, Detail, JobInvolved) ->
-    ServLoggerId ! #logInfo{status = Status,
+log_event(Status, SrcMethod, Detail, JobInvolved) ->
+    servlogger ! #logInfo{status = Status,
                             src_method = SrcMethod,
                             detail = Detail,
                             job_involved = JobInvolved,
