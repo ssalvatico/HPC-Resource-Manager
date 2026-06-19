@@ -3,17 +3,12 @@
 -import(event_logger, [log_event/5]).
 -export([init/0, conn_handler/3, sender/3, receiver/3]).
 
-%%% Connect tiene la responsabilidad de conectarse al agente C
-%%% en ?HOST:?PORT.
-%%% Una vez conectado, notifica al proceso logger, 
-%%% crea el proceso conn_handler y termina.
-%%% Para evitar problemas, connect tiene 3 intentos para una conexion
-%%% exitosa. En caso de error, notifica al logger y termina.
-
+%%% Attempts to establish a TCP connection to the C agent at ?HOST:?PORT.
+%%% Retries up to Nth_try times on failure. On success, spawns conn_handler.
+%%% Params: ServLoggerId (logger PID), Nth_try (remaining attempts), JobSchedulerId (scheduler PID)
 connect(ServLoggerId, 0, JobSchedulerId) ->
     log_event(ServLoggerId, error, {?MODULE, ?FUNCTION_NAME}, "Out of tries", none),
     JobSchedulerId ! {error, "Out of tries"};
-
 connect(ServLoggerId, Nth_try, JobSchedulerId) ->
     case gen_tcp:connect(?HOST , ?PORT , [binary, {active, false}] , ?TIMEOUT) of
         {ok, Socket} ->
@@ -24,14 +19,17 @@ connect(ServLoggerId, Nth_try, JobSchedulerId) ->
             log_event(ServLoggerId, error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
                                 connect(ServLoggerId, Nth_try - 1, JobSchedulerId)
     end.
-
+%%% Spawns the sender and receiver processes, then notifies the scheduler
+%%% with their PIDs. Terminates after delegation.
 conn_handler(ServLoggerId, Socket, JobSchedulerId) ->
     ReceiverId = spawn(?MODULE, receiver, [ServLoggerId, Socket, JobSchedulerId]),
     SenderId = spawn(?MODULE, sender, [ServLoggerId, Socket, JobSchedulerId]),
     JobSchedulerId ! {receiver_pid, ReceiverId},
     JobSchedulerId ! {sender_pid, SenderId}.
 
-%%% C -> RESPONSE -> receiver -> scheduler
+%%% Listens on Socket for incoming responses from the C agent.
+%%% Forwards each packet to the scheduler. On error, notifies scheduler and terminates.
+%%% Runs indefinitely until a socket error occurs.
 receiver(ServLoggerId, Socket, JobSchedulerId) ->
     case gen_tcp:recv(Socket, 0, infinity) of
         {ok, Packet} ->
@@ -44,7 +42,9 @@ receiver(ServLoggerId, Socket, JobSchedulerId) ->
     end,
     ok.
 
-%%% scheduler -> REQUEST -> sender -> C
+%%% Waits for directives from the scheduler and forwards them to the C agent via TCP.
+%%% Handles: {get_nodes}, {job_directive, JobId, Packet}
+%%% Runs indefinitely.
 sender(ServLoggerId, Socket, JobSchedulerId) ->
     receive
         {get_nodes} ->
@@ -69,7 +69,8 @@ sender(ServLoggerId, Socket, JobSchedulerId) ->
     end,
     sender(ServLoggerId, Socket, JobSchedulerId).
 
-
+%%% Entry point. Spawns the logger and scheduler processes, then initiates
+%%% the TCP connection to the C agent.
 init() -> 
     ServLoggerId = spawn(event_logger, init, []),
     log_event(ServLoggerId, ok, {?MODULE, ?FUNCTION_NAME}, initialization, self()),
