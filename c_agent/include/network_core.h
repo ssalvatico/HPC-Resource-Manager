@@ -4,6 +4,12 @@
 #include <sys/epoll.h>
 #include <stdint.h>
 
+#define UDP_PORT 12529
+#define SOCKET_ERROR -1
+#define MAX_EVENTS 10
+#define MAX_FDS 1024
+#define BUFFER_SIZE 256
+
 /**
  * @brief Creates a non blocking TCP listening socket bound to 
  * the specified port and ip address. 
@@ -108,7 +114,7 @@ ssize_t broadcast_announce(int sockfd, int targetport, const char *message);
  * @param my_node_id The string identifier of this node (used to ignore self-echoes).
  * @return 0 on success, 1 if the message was a self-echo (ignored), or -1 on error.
  */
-int process_discovery_datagram(int udpsockfd, char* buffer, const int BUFFER_SIZE);
+int process_discovery_datagram(int udpsockfd, char* buffer, const int buffer_size, char* out_sender_ip);
 /**
  * @brief Adds a file descriptor to the epoll interest list.
  * * Reference: man 2 epoll_ctl.

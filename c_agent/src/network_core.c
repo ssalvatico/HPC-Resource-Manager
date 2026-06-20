@@ -191,15 +191,20 @@ ssize_t broadcast_announce(int sockfd, int targetport, const char *message){
     return sendto(sockfd, message, strlen(message), 0,(struct sockaddr*)&destaddr, sizeof(destaddr));
 }
 
-int process_discovery_datagram(int udpsockfd, char* buffer, const int BUFFER_SIZE){
-    struct sockaddr senderaddr;
+int process_discovery_datagram(int udpsockfd, char* buffer, const int buffer_size, char* out_sender_ip) {
+    struct sockaddr_in senderaddr; // ¡Asegúrate de que sea sockaddr_in, de 16 bytes!
     socklen_t addr_len = sizeof(senderaddr);
-    ssize_t answer = recvfrom(udpsockfd, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr*) &senderaddr, &addr_len);
+    
+    ssize_t answer = recvfrom(udpsockfd, buffer, buffer_size - 1, 0, (struct sockaddr*) &senderaddr, &addr_len);
     
     if(answer == -1) return -1; // error
-
+    
+    buffer[answer] = '\0'; // evita bugs
+    if (out_sender_ip != NULL) {
+        strcpy(out_sender_ip, inet_ntoa(senderaddr.sin_addr));
+    }
+    
     return 0;
-
 }
 
 int add_to_epoll_interest_list(int epoll_fd, int target_fd, uint32_t events){

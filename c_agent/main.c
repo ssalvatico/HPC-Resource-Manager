@@ -6,13 +6,6 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/socket.h>
-
-#define UDP_PORT 12529
-#define SOCKET_ERROR -1
-#define MAX_EVENTS 10
-#define MAX_FDS 1024
-#define BUFFER_SIZE 256
-
 #define CHECK(expr, msg) do {           \
     if ((expr) == -1) {                 \
         perror(msg);                    \
@@ -31,17 +24,29 @@ typedef struct {
 
 ConnectionState active_connections[MAX_FDS];
 
-int mock_juani(const char* sender_ip, const char* message, 
-               char* out_target_ip, int* out_target_port, char* out_message) {
+// NUEVA FIRMA: Recibe el FD de origen (origin_fd) y devuelve el FD de destino (out_target_fd)
+int mock_juani(const char* message, int origin_fd, 
+               char* out_target_ip, int* out_target_port, int* out_target_fd, char* out_message) {
     
-    // Si escribimos "CONECTAR" en Netcat, el mock finge que necesita recursos de otro nodo
+    // SIMULACIÓN 1: Alguien pide recursos y NO tenemos -> ACCIÓN 2 (Conectar afuera)
     if (strncmp(message, "CONECTAR", 8) == 0) {
-        strcpy(out_target_ip, "127.0.0.1"); // Nos conectaremos a nosotros mismos por otro puerto para probar
+        strcpy(out_target_ip, "127.0.0.1"); 
         *out_target_port = 9000;            
         strcpy(out_message, "RESERVE 1001 cpu 2\n");
-        return 1; // Trigger EPOLLOUT
+        
+        // (En la vida real, acá Juani guardaría en su tabla: "El origin_fd pidió esto")
+        
+        return 2; // Trigger EPOLLOUT
     }
-    return 0; 
+    
+    // SIMULACIÓN 2: Alguien nos manda un ping y respondemos directo -> ACCIÓN 1 (Enviar)
+    if (strncmp(message, "HOLA", 4) == 0) {
+        *out_target_fd = origin_fd; // Respondemos al mismo que nos saludó
+        strcpy(out_message, "HOLA DESDE EL AGENTE C\n");
+        return 1;
+    }
+
+    return 0; // SILENCIO
 }
 
 // parametro 1 programa 2 puerto 3 ip publica
@@ -105,6 +110,8 @@ int main(int argc, char *argv[]){
                 
                 remove_from_epoll_interest_list(epollfd, tcp_timerfd);
                 close(tcp_timerfd);
+
+                tcp_timerfd = -1; // PORQUE ASIGNA AL MAS BAJO Y PUEDE LLEGAR A REUTILIZAR ESTE NUMERO DE FD
                 
                 // Start accepting tcp connections 
                 add_to_epoll_interest_list(epollfd, tcp_public_fd, EPOLLIN);
@@ -119,18 +126,27 @@ int main(int argc, char *argv[]){
                 // MOCK: Generar string de recursos en el formato exigido
                 
                 // FUNCION JUANI PARA OBTENER RECURSOS 
+
                 char mock_announce[256];
-                sprintf(mock_announce, "ANNOUNCE %s %d cpu:4 mem:8192 gpu:1\n", lan_ip, port);
+                sprintf(mock_announce, "ANNOUNCE %d cpu:4 mem:8192 gpu:1\n", port);
                 
                 broadcast_announce(udp_fd, UDP_PORT, mock_announce);
-                // printf("Broadcast enviado: %s", mock_announce); // Descomentar para debug
+                //printf("Broadcast enviado: %s", mock_announce); // Descomentar para debug
                 
             // --- RECEIVE UDP NEW NODES---
             } else if(curr_fd == udp_fd){
                 char buffer[BUFFER_SIZE];
-                process_discovery_datagram(udp_fd, buffer, BUFFER_SIZE);
-                if(strstr(buffer, lan_ip)!= NULL)continue;
-                // FUNCION JUANI LE PASO EL BUFFER CON EL NUEVO ANNOUNCE
+                char sender_ip[16];
+                
+                if (process_discovery_datagram(udp_fd, buffer, BUFFER_SIZE, sender_ip) == 0) {
+                    if (strcmp(sender_ip, lan_ip) == 0) continue; 
+                    
+                    // FUNCION JUANI: Le pasamos la IP que extrajo la placa de red, y el buffer con los recursos
+                    // Juani actualizara su tabla de nodos vivos
+                    // juani_register_discovered_node(sender_ip, buffer);
+                    
+                    printf("Descubierto nodo %s con recursos: %s\n", sender_ip, buffer);
+                }
                 
             // --- NEW TCP CONNECTION ---
             } else if(curr_fd == tcp_public_fd){
@@ -173,6 +189,7 @@ int main(int argc, char *argv[]){
                         char target_ip[16];
                         int target_port;
                         char msg_to_send[BUFFER_SIZE];
+                        int target_fd;
 
                         // LE PASO A JUANO Y ME EDITA LAS VARIABLES SI HAY QUE RESPONDER
                         int requires_new_connection = mock_juani(
@@ -180,11 +197,17 @@ int main(int argc, char *argv[]){
                             recv_buffer, 
                             target_ip, 
                             &target_port, 
+                            &target_fd,
                             msg_to_send
                         );
 
+                        // SI JUANI QUIERE RESPONDER A ESTE MENSAJE INSTA
+                        if(requires_new_connection == 1){
+                            send_tcp_message(target_fd, msg_to_send);
+                        }
+
                         // SI JUANI QUIERE RECURSOS DE UN NUEVO NODE ME DICE Y ME CONECTO CON LAS VARIABLES EDITADAS
-                        if (requires_new_connection) {
+                        if (requires_new_connection == 2) {
                             int new_fd = connect_to_tcp_node(target_ip, target_port);
                             
                             if (new_fd != -1 && new_fd < MAX_FDS) {
@@ -210,14 +233,16 @@ int main(int argc, char *argv[]){
                         
                         remove_from_epoll_interest_list(epollfd, curr_fd);
                         close(curr_fd);
+                        continue;
 
                     } else if (bytes_read == -2) {
                         // EAGAIN: Wait for more data
                     } else {
-                        perror("Error muerte tragedia");
+                        printf("Unexpeceted disconnection\n");
                         active_connections[curr_fd].is_active = 0;
                         remove_from_epoll_interest_list(epollfd, curr_fd);
                         close(curr_fd);
+                        continue;
                     }
                 }
 
@@ -228,7 +253,7 @@ int main(int argc, char *argv[]){
                 
                     // Check if async connect was successful
                     if (getsockopt(curr_fd, SOL_SOCKET, SO_ERROR, &result, &result_len) < 0 || result != 0) {
-                        printf("Failed to connecto node IP:(%s).\\n", active_connections[curr_fd].ip);
+                        printf("Failed to connecto node IP:(%s).\n", active_connections[curr_fd].ip);
                         
                         // Clean up
                         active_connections[curr_fd].is_active = 0;
@@ -237,7 +262,7 @@ int main(int argc, char *argv[]){
                         continue;
                     }
                 
-                    printf("Connected succesfully to %s (FD: %d)\\n", active_connections[curr_fd].ip, curr_fd);
+                    printf("Connected succesfully to %s (FD: %d)\n", active_connections[curr_fd].ip, curr_fd);
                 
                     // 1. Send the pending message stored when connect_to_tcp_node was called
                     send_tcp_message(curr_fd, active_connections[curr_fd].pending_message);
