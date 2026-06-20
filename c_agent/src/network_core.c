@@ -8,7 +8,7 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <errno.h>
-
+#include <sys/timerfd.h>
 #define LISTEN_BACKLOG 10
 
 int create_tcp_listener(const char* ip_address, int port){
@@ -221,4 +221,165 @@ int remove_from_epoll_interest_list(int epoll_fd, int target_fd){
     struct epoll_event event;
     event.data.fd = target_fd;
     return epoll_ctl(epoll_fd, EPOLL_CTL_DEL, target_fd, &event);
+}
+
+void init_server(ServerContext* ctx, int argc, char *argv[]) {
+    if(argc != 3) exit(EXIT_FAILURE);
+    
+    ctx->port = atoi(argv[1]);
+    ctx->lan_ip = argv[2];
+    ctx->epollfd = epoll_create1(0);
+    
+    ctx->tcp_public_fd = create_tcp_listener(ctx->lan_ip, ctx->port);
+    ctx->erlang_tcp_fd = create_tcp_listener("127.0.0.1", ctx->port);
+    ctx->udp_fd = create_udp_listener_broadcaster(UDP_PORT);
+    
+    // tcp timerfd config
+    ctx->tcp_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+    struct itimerspec its_tcp = {0};
+    its_tcp.it_value.tv_sec = 2; // 2 seconds shot
+
+    // udp timer config
+    ctx->udp_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+    struct itimerspec its_udp = {0};
+    its_udp.it_value.tv_sec = 1; // 1 second first shot
+    its_udp.it_interval.tv_sec = 1;
+
+    timerfd_settime(ctx->tcp_timerfd, 0, &its_tcp, NULL);
+    timerfd_settime(ctx->udp_timerfd, 0, &its_udp, NULL);
+
+    add_to_epoll_interest_list(ctx->epollfd, ctx->tcp_timerfd, EPOLLIN);
+    add_to_epoll_interest_list(ctx->epollfd, ctx->udp_timerfd, EPOLLIN);
+    add_to_epoll_interest_list(ctx->epollfd, ctx->udp_fd, EPOLLIN);
+    
+    return;
+}
+
+void handle_tcp_timer_expiration(ServerContext* ctx) {
+    uint64_t exp;
+    CHECK(read(ctx->tcp_timerfd, &exp, sizeof(uint64_t)), "Read tcp timer"); 
+    
+    // Lo sacamos de epoll y lo destruimos
+    remove_from_epoll_interest_list(ctx->epollfd, ctx->tcp_timerfd);
+    close(ctx->tcp_timerfd);
+    ctx->tcp_timerfd = -1; // Evita el bug del reciclaje de FDs
+    
+    // Empezamos a aceptar conexiones TCP
+    add_to_epoll_interest_list(ctx->epollfd, ctx->tcp_public_fd, EPOLLIN);
+    add_to_epoll_interest_list(ctx->epollfd, ctx->erlang_tcp_fd, EPOLLIN);
+    
+    printf("Activate TCP servers\n");
+}
+
+void handle_udp_timer_expiration(ServerContext* ctx) {
+    uint64_t exp;
+    CHECK(read(ctx->udp_timerfd, &exp, sizeof(uint64_t)), "Read udp timer");
+    
+    char mock_announce[256];
+    sprintf(mock_announce, "ANNOUNCE %d cpu:4 mem:8192 gpu:1\n", ctx->port);
+    
+    broadcast_announce(ctx->udp_fd, UDP_PORT, mock_announce);
+}
+
+void handle_incoming_discovery(ServerContext* ctx) {
+    char buffer[BUFFER_SIZE];
+    char sender_ip[16];
+    
+    if (process_discovery_datagram(ctx->udp_fd, buffer, BUFFER_SIZE, sender_ip) == 0) {
+        if (strcmp(sender_ip, ctx->lan_ip) == 0) return; 
+        
+        // (Acá Juani actualizará su tabla de nodos)
+        printf("Descubierto nodo %s con recursos: %s\n", sender_ip, buffer);
+    }
+}
+
+void handle_new_tcp_connection(ServerContext* ctx, int server_fd) {
+    char client_ip[16];
+    int client_fd = accept_tcp_connection(server_fd, client_ip);
+    
+    if (client_fd != -1 && client_fd < MAX_FDS) {
+        if (server_fd == ctx->tcp_public_fd) {
+            printf("[PUBLIC] New agent connected: %s (FD: %d)\n", client_ip, client_fd);
+        } else {
+            printf("[ERLANG] Planificador local conectado desde: %s (FD: %d)\n", client_ip, client_fd);
+        }
+        
+        // Registrar en memoria y agregar al epoll
+        active_connections[client_fd].is_active = 1;
+        strncpy(active_connections[client_fd].ip, client_ip, 16);
+        add_to_epoll_interest_list(ctx->epollfd, client_fd, EPOLLIN);
+    }
+}
+
+void handle_client_message(ServerContext* ctx, int curr_fd) {
+    char recv_buffer[BUFFER_SIZE];
+    ssize_t bytes_read = receive_tcp_message(curr_fd, recv_buffer, BUFFER_SIZE);
+    
+    if (bytes_read > 0) {
+        printf("Msg received (FD %d - IP: %s): %s\n", curr_fd, active_connections[curr_fd].ip, recv_buffer);
+        
+        char target_ip[16];
+        int target_port = 0;
+        int target_fd = -1;
+        char msg_to_send[BUFFER_SIZE];
+
+        // Se lo pasamos a la lógica pura
+        int action = mock_juani(recv_buffer, curr_fd, target_ip, &target_port, &target_fd, msg_to_send);
+
+        if (action == 1) {
+            // Acción 1: Disparar el mensaje a donde indique Juani
+            if (target_fd != -1 && active_connections[target_fd].is_active) {
+                send_tcp_message(target_fd, msg_to_send);
+            }
+        } 
+        else if (action == 2) {
+            // Acción 2: Conectarse a otro nodo
+            int new_fd = connect_to_tcp_node(target_ip, target_port);
+            if (new_fd != -1 && new_fd < MAX_FDS) {
+                active_connections[new_fd].is_active = 1;
+                strncpy(active_connections[new_fd].ip, target_ip, 16);
+                strncpy(active_connections[new_fd].pending_message, msg_to_send, BUFFER_SIZE);
+                add_to_epoll_interest_list(ctx->epollfd, new_fd, EPOLLIN | EPOLLOUT);
+            }
+        }
+    } 
+    else if (bytes_read == 0) {
+        printf("Client disconnected (FD %d).\n", curr_fd);
+        active_connections[curr_fd].is_active = 0;
+        active_connections[curr_fd].pending_message[0] = '\0';
+        remove_from_epoll_interest_list(ctx->epollfd, curr_fd);
+        close(curr_fd);
+    } 
+    else if (bytes_read != -2) { // Si no es EAGAIN (-2), es un error grave
+        printf("Unexpected disconnection (FD %d)\n", curr_fd);
+        active_connections[curr_fd].is_active = 0;
+        remove_from_epoll_interest_list(ctx->epollfd, curr_fd);
+        close(curr_fd);
+    }
+}
+
+void handle_async_connection_success(ServerContext* ctx, int curr_fd) {
+    int result;
+    socklen_t result_len = sizeof(result);
+
+    // Verificar si conectó o el nodo estaba apagado
+    if (getsockopt(curr_fd, SOL_SOCKET, SO_ERROR, &result, &result_len) < 0 || result != 0) {
+        printf("Failed to connect to node IP: (%s).\n", active_connections[curr_fd].ip);
+        active_connections[curr_fd].is_active = 0;
+        remove_from_epoll_interest_list(ctx->epollfd, curr_fd);
+        close(curr_fd);
+        return; // IMPORTANTE el return para cortar la ejecución
+    }
+
+    printf("Connected succesfully to %s (FD: %d)\n", active_connections[curr_fd].ip, curr_fd);
+
+    // 1. Enviar el string retenido
+    send_tcp_message(curr_fd, active_connections[curr_fd].pending_message);
+    active_connections[curr_fd].pending_message[0] = '\0';
+
+    // 2. Apagar EPOLLOUT cambiando el evento a solo lectura (EPOLLIN)
+    struct epoll_event mod_event;
+    mod_event.events = EPOLLIN;
+    mod_event.data.fd = curr_fd;
+    epoll_ctl(ctx->epollfd, EPOLL_CTL_MOD, curr_fd, &mod_event);
 }

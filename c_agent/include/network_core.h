@@ -3,12 +3,35 @@
 
 #include <sys/epoll.h>
 #include <stdint.h>
+#include <sys/epoll.h>
+#include <stdint.h>
+#include <sys/types.h>  
+#include <stddef.h>
 
 #define UDP_PORT 12529
 #define SOCKET_ERROR -1
 #define MAX_EVENTS 10
 #define MAX_FDS 1024
 #define BUFFER_SIZE 256
+
+typedef struct {
+    int port;
+    const char* lan_ip;
+    int epollfd;
+    int tcp_public_fd;
+    int erlang_tcp_fd;
+    int udp_fd;
+    int tcp_timerfd;
+    int udp_timerfd;
+} ServerContext;
+
+typedef struct {
+    int is_active;                      
+    char ip[16];                        
+    char pending_message[BUFFER_SIZE];  
+} ConnectionState;
+
+extern ConnectionState active_connections[MAX_FDS];
 
 /**
  * @brief Creates a non blocking TCP listening socket bound to 
@@ -139,5 +162,70 @@ int add_to_epoll_interest_list(int epollfd, int targetfd, uint32_t events);
  * @return 0 on success, or -1 on error.
  */
 int remove_from_epoll_interest_list(int epoll_fd, int target_fd);
+
+/**
+ * @brief Initializes the server context, sockets, and timers.
+ * * Creates the epoll instance, sets up the TCP public listener, the local 
+ * Erlang listener, and the UDP broadcast socket. It also arms the initial 
+ * timers for delayed TCP activation and periodic UDP broadcasting.
+ * * @param ctx Pointer to the ServerContext struct to be initialized.
+ * @param argc Argument count from main.
+ * @param argv Argument vector from main containing port and LAN IP.
+ */
+void init_server(ServerContext* ctx, int argc, char *argv[]);
+
+/**
+ * @brief Handles the expiration of the initial TCP timer.
+ * * Consumes the timer file descriptor, removes it from epoll, and activates
+ * the TCP listening sockets so the server begins accepting connections.
+ * * @param ctx Pointer to the ServerContext containing the server state.
+ */
+void handle_tcp_timer_expiration(ServerContext* ctx);
+
+/**
+ * @brief Handles the expiration of the periodic UDP timer.
+ * * Broadcasts the node's available resources to the local network using
+ * the ANNOUNCE protocol.
+ * * @param ctx Pointer to the ServerContext containing the server state.
+ */
+void handle_udp_timer_expiration(ServerContext* ctx);
+
+/**
+ * @brief Processes incoming UDP discovery datagrams.
+ * * Reads the datagram, extracts the sender's IP, and ignores self-echoes.
+ * Passes valid datagrams to the resource manager (Juani) to update the network map.
+ * * @param ctx Pointer to the ServerContext containing the server state.
+ */
+void handle_incoming_discovery(ServerContext* ctx);
+
+/**
+ * @brief Accepts a new incoming TCP connection from the network or Erlang.
+ * * Accepts the connection, makes the socket non-blocking, registers the 
+ * client's IP in the active_connections array, and adds it to epoll for reading.
+ * * @param ctx Pointer to the ServerContext containing the server state.
+ * @param server_fd The listening socket file descriptor that triggered the event.
+ */
+void handle_new_tcp_connection(ServerContext* ctx, int server_fd);
+
+/**
+ * @brief Reads and processes an incoming message from a connected TCP client.
+ * * Reads the buffer and passes it to the business logic module (Juani). 
+ * Depending on the returned Action Code, it either replies synchronously, 
+ * connects to a new node asynchronously, or remains silent. Handles graceful 
+ * and abrupt disconnections.
+ * * @param ctx Pointer to the ServerContext containing the server state.
+ * @param curr_fd The file descriptor of the client who sent the data.
+ */
+void handle_client_message(ServerContext* ctx, int curr_fd);
+
+/**
+ * @brief Completes an asynchronous outgoing TCP connection (EPOLLOUT).
+ * * Verifies if the non-blocking connect() was successful using getsockopt.
+ * If successful, it dispatches the pending reservation message and switches
+ * the socket's epoll interest from EPOLLOUT back to EPOLLIN.
+ * * @param ctx Pointer to the ServerContext containing the server state.
+ * @param curr_fd The file descriptor of the newly connected outgoing socket.
+ */
+void handle_async_connection_success(ServerContext* ctx, int curr_fd);
 
 #endif
