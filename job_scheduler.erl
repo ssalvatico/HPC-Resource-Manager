@@ -112,11 +112,36 @@ generate_job_request(JobId, NodeRecordList) ->
   %2. Pick N random nodes
   SelectedNodes = pick_random(N, NodeRecordList),
   %3. Pick random resources from SelectNodes
-  % i.e [{"192.168.1.1",[{cpu,2}, {mem,100}]}, {"192.168.1.2", [{gpu,1}]} ]
+  % UNCOMMENT TO TEST DEADLOCK
+  % AvailableResources = lists:flatten(lists:filtermap(fun(SelectedNode) -> pick_resources(SelectedNode) end, SelectedNodes)),
+  
+  %% === ANTI DEADLOCK SORT === %%
+  %% Sorting the Resources by resource name first and then by Ip.
+  %% This garantees that if two different request requires the same resources from the same Node
+  %% those same resources are in the same position in the request.
+  %% Therefore, each Node fight for the same resource before requesting the next resource and none of the Nodes
+  %% will lock a resource that another Node needs before requesting a resource that is no longer available.
+  %% For example:
+  %% Node 192.168.1.1:8000 with cpu:2
+  %% Node 192.168.1.2:8000 with gpu:1
+  %%
+  %% JOB_REQUEST 123 192.168.1.1:8000:cpu:2;192.168.1.2:8000:gpu:1
+  %% JOB_REQUEST 456 192.168.1.1:8000:cpu:2;192.168.1.2:8000:gpu:1
+  %%
+  %% When both request are fire at the same time, since the resources and Ips are sorted one of the JobId
+  %% will "win" to acquire the `cpu:2` and then the other Job will be blocked waiting for that same reason.
+  %% Hence, the first JobId can acquire the `gpu:1` because the other Job was not able to request that first.
+  
+  % i.e [ {"192.168.1.2",[{mem,100}, {cpu,2}]}, {"192.168.1.1", [{gpu,1}, {cpu,4}]} ]
   AvailableResources = lists:flatten(lists:filtermap(fun(SelectedNode) -> pick_resources(SelectedNode) end, SelectedNodes)),
-  % i.e JOB REQUEST 1001 @192.168.1.2:cpu:2 @192.168.1.3:gpu:1
+  % i.e [ {"192.168.1.2",[{cpu,2}, {mem,100}]}, {"192.168.1.1", [{cpu,4}, {gpu,1}]} ]
+  SortedByResources = lists:map(fun({Ip, Resources}) -> {Ip, lists:keysort(1, Resources)} end, AvailableResources),
+  % i.e [ {"192.168.1.1", [{cpu,4}, {gpu,1}]}, {"192.168.1.2",[{cpu,2}, {mem,100}]} ]
+  SortedByIp = lists:keysort(1, SortedByResources),
+  %% === ANTI DEADLOCK SORT === %%
+
   JobRequest = "JOB_REQUEST " ++ integer_to_list(JobId),
-  {lists:foldl(fun build_job_request/2, JobRequest, AvailableResources), AvailableResources}.
+  {lists:foldl(fun build_job_request/2, JobRequest, SortedByIp), SortedByIp}.
 
 shuffle(NodeRecordList) ->
   % 1. Pair each element with a random float number 
