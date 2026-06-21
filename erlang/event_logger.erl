@@ -5,7 +5,7 @@
 %%% Entry point. Opens the log file in append mode and delegates to init/1.
 %%% Creates event_logger.txt if it does not exist.
 init() ->
-    {ok,  Fd} = file:open("event_logger.txt",[raw, append, {encoding, "utf-8"}]),
+    {ok,  Fd} = file:open("event_logger.txt", [raw, append, {encoding, "utf-8"}]),
     init(Fd).
 
 %%% Main loop. Waits for #logInfo{} records and writes them to the log file.
