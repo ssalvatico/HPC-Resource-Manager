@@ -2,11 +2,16 @@
 -include("header.hrl").
 -export([init/1, init/0, log_event/4]).
 
+
+
+
 %%% Entry point. Opens the log file in append mode and delegates to init/1.
 %%% Creates event_logger.txt if it does not exist.
 init() ->
     {ok,  Fd} = file:open("event_logger.txt", [raw, append, {encoding, "utf-8"}]),
     init(Fd).
+
+
 
 %%% Main loop. Waits for #logInfo{} records and writes them to the log file.
 %%% Params: Fd (file descriptor opened by init/0)
@@ -18,6 +23,8 @@ init(Fd) ->
             file:write(Fd, LogMsg)
     end,
     init(Fd).
+
+
 
 %%% Builds a #logInfo{} record and sends it to the logger process.
 %%% Params: Status (ok | error), SrcMethod ({Module, Function}), 
