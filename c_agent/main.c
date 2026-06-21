@@ -6,6 +6,7 @@
 #include <string.h>
 #include <signal.h> 
 #include <unistd.h>
+
 #define NUM_THREADS 4
 
 volatile sig_atomic_t server_running = 1;
