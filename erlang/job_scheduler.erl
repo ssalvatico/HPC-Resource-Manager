@@ -59,7 +59,11 @@ init(State) ->
       end;
     {ok, get_nodes} ->
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] get_nodes sent succesfully", none),
-      init(State)
+      init(State);
+    
+      {error, Reason} ->
+      event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
+      erlang:halt()
   end.
 
 
@@ -133,7 +137,7 @@ assign_resource({"mem", Amount}, NodeRecord) ->
 %% Auxiliar functions to generate a JOB_REQUEST
 
 %%% Generates a sorted JOB_REQUEST string and the list of requested resources.
-%%% Resources are sorted by (ResourceType, NodeIp) to prevent deadlocks.
+%%% Resources are sorted by (NodeIp, ResourceType) to prevent deadlocks.
 %%% Params: JobId (integer), NodeRecordList (list of #node{})
 %%% Returns: {JobRequestString, SortedResources}
 generate_job_request(JobId, NodeRecordList) ->
