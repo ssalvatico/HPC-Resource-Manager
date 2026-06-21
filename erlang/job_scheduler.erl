@@ -32,7 +32,8 @@ init(State) ->
           init(State#{JobId => {pending, AvailableResources}});
         
         {job_granted, JobId} ->
-          State1 = maps:update(JobId, fun update_job_state/2, State),
+          State1 = maps:update_with(JobId, fun ({pending, Resources}) ->  {granted, Resources};
+                                               ({_, _}) -> throw("Invalid state transition") end, State),
           event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_granted", JobId),
           spawn(fun () -> simulate_load(JobId, State1, self()) end),
           init(State1);
@@ -179,16 +180,7 @@ pick_resources(SelectedNode) ->
 
 % i.e JOB REQUEST 1001 @192.168.1.2:cpu:2 @192.168.1.3:gpu:1
 build_job_request({Ip, Name, Amount}, Acc) ->
-  Acc ++ " @" ++ Ip ++ ":" ++ atom_to_list(Name) ++ ":" ++ integer_to_list(Amount).
-
-update_job_state({pending, AvailableResources}, granted) ->
-  {granted, AvailableResources};
-
-update_job_state({pending, AvailableResources}, denied) ->
-  {denied, AvailableResources};
-
-update_job_state({_, _}, _) ->
-  throw({invalid_state, "Invalid Job state transition"}).                          
+  Acc ++ " @" ++ Ip ++ ":" ++ atom_to_list(Name) ++ ":" ++ integer_to_list(Amount).                         
 
 simulate_load(JobId, State1, InitPid) ->
   timer:sleep(rand:uniform(?WORK_TIME)),
