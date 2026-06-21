@@ -24,19 +24,6 @@
     timestamp
 }).
 
--record(resource,{
-    type,   % cpu | gpu | ram
-    node,   % C agent IP
-    amount  % Integer
-}).
-
--record(job,{
-    id,         % job_id
-    resources,  % sorted list of resources
-    status,     % active | pending | denied
-    nth_try     % Integer for the backoff to wait
-}).
-
 % Represents a C Node data
 -record(node,{
     ip,

@@ -1,7 +1,9 @@
 -module(erlang_c_bridge).
 -include("header.hrl").
--import(event_logger, [log_event/4]).
 -export([init/0, init/1, conn_handler/2, sender/2, receiver/2, connect/3]).
+
+
+
 
 %%% Attempts to establish a TCP connection to the C agent at ?HOST:?PORT.
 %%% Retries up to Nth_try times on failure. On success, spawns conn_handler.
@@ -22,6 +24,9 @@ connect(Port, Nth_try, JobSchedulerId) ->
             event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
             connect(Port, Nth_try - 1, JobSchedulerId)
     end.
+
+
+
 %%% Spawns the sender and receiver processes, then notifies the scheduler
 %%% with their PIDs. Terminates after delegation.
 conn_handler(Socket, JobSchedulerId) ->
@@ -29,6 +34,8 @@ conn_handler(Socket, JobSchedulerId) ->
     SenderId = spawn(?MODULE, sender, [Socket, JobSchedulerId]),
     JobSchedulerId ! {receiver_pid, ReceiverId},
     JobSchedulerId ! {sender_pid, SenderId}.
+
+
 
 %%% Listens on Socket for incoming responses from the C agent.
 %%% Forwards each packet to the scheduler. On error, notifies scheduler and terminates.
@@ -41,9 +48,12 @@ receiver(Socket, JobSchedulerId) ->
                                 receiver(Socket, JobSchedulerId);
         {error, Reason} ->
             JobSchedulerId ! {error, Reason},
-            event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none)
+            event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
+            gen_tcp:close(Socket)
     end,
     ok.
+
+
 
 %%% Waits for directives from the scheduler and forwards them to the C agent via TCP.
 %%% Handles: {get_nodes}, {job_directive, JobId, Packet}
@@ -53,7 +63,7 @@ sender(Socket, JobSchedulerId) ->
         {get_nodes} ->
             case gen_tcp:send(Socket, <<"GET_NODES">>) of
                 ok ->
-                    event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, get_nodes, none),
+                    event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "Node list requested", none),
                     JobSchedulerId ! {ok, get_nodes};
                 {error, Reason} ->
                     event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
@@ -72,6 +82,8 @@ sender(Socket, JobSchedulerId) ->
     end,
     sender(Socket, JobSchedulerId).
 
+
+
 %%% Entry point. Spawns the logger and scheduler processes, then initiates
 %%% the TCP connection to the C agent.
 init() -> 
@@ -83,4 +95,3 @@ init(Port) ->
     event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, initialization, self()),
     JobSchedulerId = spawn(job_scheduler, init, []),
     connect(Port, ?TRIES, JobSchedulerId).
-
