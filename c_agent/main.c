@@ -1,33 +1,19 @@
 #include "include/network_core.h"
+#include "include/thread_pool.h"
+#include "include/mock_resource_manager.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <signal.h> 
+#include <unistd.h>
+#define NUM_THREADS 4
 
-ConnectionState active_connections[MAX_FDS];
+volatile sig_atomic_t server_running = 1;
 
-// NUEVA FIRMA: Recibe el FD de origen (origin_fd) y devuelve el FD de destino (out_target_fd)
-int mock_juani(const char* message, int origin_fd, 
-               char* out_target_ip, int* out_target_port, int* out_target_fd, char* out_message) {
-    
-    // SIMULACIÓN 1: Alguien pide recursos y NO tenemos -> ACCIÓN 2 (Conectar afuera)
-    if (strncmp(message, "CONECTAR", 8) == 0) {
-        strcpy(out_target_ip, "127.0.0.1"); 
-        *out_target_port = 9000;            
-        strcpy(out_message, "RESERVE 1001 cpu 2\n");
-        
-        // (En la vida real, acá Juani guardaría en su tabla: "El origin_fd pidió esto")
-        
-        return 2; // Trigger EPOLLOUT
-    }
-    
-    // SIMULACIÓN 2: Alguien nos manda un ping y respondemos directo -> ACCIÓN 1 (Enviar)
-    if (strncmp(message, "HOLA", 4) == 0) {
-        *out_target_fd = origin_fd; // Respondemos al mismo que nos saludó
-        strcpy(out_message, "HOLA DESDE EL AGENTE C\n");
-        return 1;
-    }
-
-    return 0; // SILENCIO
+void handle_sigint(int sig) {
+    (void)sig; 
+    printf("\nShutting down...\n");
+    server_running = 0; // Rompe el bucle principal
 }
 
 // parametro 1 programa 2 puerto 3 ip publica
@@ -35,13 +21,17 @@ int main(int argc, char *argv[]) {
     // 1. Inicialización limpia y encapsulada
     ServerContext ctx;
     init_server(&ctx, argc, argv);
-    memset(active_connections, 0, sizeof(active_connections));
+    node_data_t my_node;
+    ctx.mynode = &my_node;
+    init_thread_pool(&ctx, NUM_THREADS);
+
+    //signal(SIGINT, handle_sigint);
 
     struct epoll_event events[MAX_EVENTS];
     printf("Starting c_agent PORT: %d IP: %s\n", ctx.port, ctx.lan_ip);
 
     // 2. El bucle Event-Dispatcher (Sin lógica mezclada)
-    while(1) {
+    while(server_running) {
         int n_events = epoll_wait(ctx.epollfd, events, MAX_EVENTS, -1);
         
         for(int i = 0 ; i < n_events; i++) {
@@ -52,23 +42,45 @@ int main(int argc, char *argv[]) {
                 handle_tcp_timer_expiration(&ctx);
             } 
             else if (curr_fd == ctx.udp_timerfd) {
-                handle_udp_timer_expiration(&ctx);
+                // Leemos el timer en main para destrabar el epoll
+                uint64_t exp;
+                read(ctx.udp_timerfd, &exp, sizeof(uint64_t));
+                
+                WorkerTask task = {.fd = -1, .type = TASK_UDP_ANNOUNCE};
+                thread_pool_push_task(task);
+            }
+            else if (curr_fd == ctx.gc_timerfd) {
+                uint64_t exp;
+                read(ctx.gc_timerfd, &exp, sizeof(uint64_t));
+                
+                WorkerTask task = {.fd = -1, .type = TASK_GARBAGE_COLLECTOR};
+                thread_pool_push_task(task);
             }
             else if (curr_fd == ctx.udp_fd) {
-                handle_incoming_discovery(&ctx);
+                WorkerTask task = {.fd = ctx.udp_fd, .type = TASK_UDP_DISCOVERY};
+                thread_pool_push_task(task);
             }
             else if (curr_fd == ctx.tcp_public_fd || curr_fd == ctx.erlang_tcp_fd) {
                 handle_new_tcp_connection(&ctx, curr_fd);
             }
             else {
                 if (event_type & EPOLLIN) {
-                    handle_client_message(&ctx, curr_fd);
+                    WorkerTask task = {.fd = curr_fd, .type = TASK_TCP_CLIENT_MSG};
+                    thread_pool_push_task(task);
                 }
                 if (event_type & EPOLLOUT) {
-                    handle_async_connection_success(&ctx, curr_fd);
+                    handle_connection_success(&ctx, curr_fd);
                 }
             }
         }
     }
+
+    thread_pool_destroy();
+    
+    close(ctx.epollfd);
+    close(ctx.tcp_public_fd);
+    close(ctx.erlang_tcp_fd);
+    close(ctx.udp_fd);
+
     return 0;
 }

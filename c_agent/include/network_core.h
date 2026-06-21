@@ -3,16 +3,19 @@
 
 #include <sys/epoll.h>
 #include <stdint.h>
-#include <sys/epoll.h>
-#include <stdint.h>
 #include <sys/types.h>  
 #include <stddef.h>
+#include <pthread.h>
 
 #define UDP_PORT 12529
 #define SOCKET_ERROR -1
 #define MAX_EVENTS 10
 #define MAX_FDS 1024
 #define BUFFER_SIZE 256
+
+//extern pthread_rwlock_t connections_lock;
+
+// Nueva función para rearmar el EPOLLONESHOT
 
 typedef struct {
     int port;
@@ -23,6 +26,8 @@ typedef struct {
     int udp_fd;
     int tcp_timerfd;
     int udp_timerfd;
+    int gc_timerfd; //garage collector
+    void* mynode;
 } ServerContext;
 
 typedef struct {
@@ -31,7 +36,18 @@ typedef struct {
     char pending_message[BUFFER_SIZE];  
 } ConnectionState;
 
-extern ConnectionState active_connections[MAX_FDS];
+typedef struct {
+    char ip[16];
+    char message[BUFFER_SIZE];
+} AsyncPending;
+
+
+typedef struct {
+    char target_ip[16];   
+    int target_port;      
+    int target_fd;        
+    char message[BUFFER_SIZE]; 
+} out_msg_t;
 
 /**
  * @brief Creates a non blocking TCP listening socket bound to 
@@ -216,7 +232,7 @@ void handle_new_tcp_connection(ServerContext* ctx, int server_fd);
  * * @param ctx Pointer to the ServerContext containing the server state.
  * @param curr_fd The file descriptor of the client who sent the data.
  */
-void handle_client_message(ServerContext* ctx, int curr_fd);
+int handle_client_message(ServerContext* ctx, int curr_fd);
 
 /**
  * @brief Completes an asynchronous outgoing TCP connection (EPOLLOUT).
@@ -226,6 +242,25 @@ void handle_client_message(ServerContext* ctx, int curr_fd);
  * * @param ctx Pointer to the ServerContext containing the server state.
  * @param curr_fd The file descriptor of the newly connected outgoing socket.
  */
-void handle_async_connection_success(ServerContext* ctx, int curr_fd);
+
+/**
+ * @brief Procesa una bandeja de salida de mensajes generada por la lógica de recursos.
+ * * Envía mensajes directamente si el FD es conocido, o inicia conexiones TCP 
+ * asíncronas si el FD es -1.
+ * * @param ctx Contexto del servidor.
+ * @param outbox Arreglo de mensajes a procesar.
+ * @param outbox_count Cantidad de mensajes en el arreglo.
+ */
+void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count);
+
+void handle_connection_success(ServerContext* ctx, int curr_fd);
+
+void handle_gc_timer_expiration(ServerContext* ctx);
+
+int rearm_epoll_fd(int epoll_fd, int target_fd);
+
+void get_ip_from_fd(int fd, char* ip_buffer); 
+
+void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count);
 
 #endif
