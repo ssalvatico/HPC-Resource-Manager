@@ -132,16 +132,14 @@ generate_job_request(JobId, NodeRecordList) ->
   %% will "win" to acquire the `cpu:2` and then the other Job will be blocked waiting for that same reason.
   %% Hence, the first JobId can acquire the `gpu:1` because the other Job was not able to request that first.
   
-  % i.e [ {"192.168.1.2",[{mem,100}, {cpu,2}]}, {"192.168.1.1", [{gpu,1}, {cpu,4}]} ]
+  % i.e [ {"192.168.1.2", mem, 100} , {"192.168.1.2",cpu, 2}, {"192.168.1.1", gpu, 1}, {"192.168.1.1", cpu, 4} ]
   AvailableResources = lists:flatten(lists:filtermap(fun(SelectedNode) -> pick_resources(SelectedNode) end, SelectedNodes)),
   % i.e [ {"192.168.1.2",[{cpu,2}, {mem,100}]}, {"192.168.1.1", [{cpu,4}, {gpu,1}]} ]
-  SortedByResources = lists:map(fun({Ip, Resources}) -> {Ip, lists:keysort(1, Resources)} end, AvailableResources),
-  % i.e [ {"192.168.1.1", [{cpu,4}, {gpu,1}]}, {"192.168.1.2",[{cpu,2}, {mem,100}]} ]
-  SortedByIp = lists:keysort(1, SortedByResources),
+  SortedResources = lists:sort(fun ({Ip1, Resource1, _}, {Ip2, Resource2, _}) -> {Ip1, Resource1} =< {Ip2, Resource2} end, AvailableResources),
   %% === ANTI DEADLOCK SORT === %%
 
   JobRequest = "JOB_REQUEST " ++ integer_to_list(JobId),
-  {lists:foldl(fun build_job_request/2, JobRequest, SortedByIp), SortedByIp}.
+  {lists:foldl(fun build_job_request/2, JobRequest, SortedResources), SortedResources}.
 
 shuffle(NodeRecordList) ->
   % 1. Pair each element with a random float number 
@@ -174,16 +172,14 @@ pick_resources(SelectedNode) ->
       Resources = lists:map(fun({Res, Max}) ->
                               Amount = rand:uniform(Max),
                               % {cpu, 4}
-                              {Res, Amount}
+                              {SelectedNode#node.ip, Res, Amount}
                             end, Selected),
-      {true, {SelectedNode#node.ip, Resources}}
+      {true, Resources}
   end.
 
 % i.e JOB REQUEST 1001 @192.168.1.2:cpu:2 @192.168.1.3:gpu:1
-% i.e Resources = [{cpu,2}, {mem,100}]
-build_job_request({Ip, Resources}, Acc) ->
-  ResourceString = lists:foldl(fun({Name, Amount}, InnerAcc) -> InnerAcc ++ ":" ++ atom_to_list(Name) ++ ":" ++ integer_to_list(Amount) end, "", Resources),
-  Acc ++ " @" ++ Ip  ++ ResourceString.
+build_job_request({Ip, Name, Amount}, Acc) ->
+  Acc ++ " @" ++ Ip ++ ":" ++ atom_to_list(Name) ++ ":" ++ integer_to_list(Amount).
 
 update_job_state({pending, AvailableResources}, granted) ->
   {granted, AvailableResources};
@@ -200,4 +196,3 @@ simulate_load(JobId, State1, InitPid) ->
   InitPid ! {job_release, JobId}.
 
 
-  
