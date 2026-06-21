@@ -13,7 +13,7 @@ job_scheduler.beam: header.hrl job_scheduler.erl
 build: all
 
 run:
-	erl -noshell -eval "erlang_c_bridge:init(), timer:sleep(infinityq)"
+	erl -noshell -eval "erlang_c_bridge:init(), timer:sleep(infinity)"
 	
 
 clear:
