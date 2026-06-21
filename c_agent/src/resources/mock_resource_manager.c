@@ -1,5 +1,5 @@
-#include "mock_resource_manager.h"
-#include "include/network_core.h"
+#include "../include/resources/mock_resource_manager.h"
+#include "../include/comms/server_types.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>

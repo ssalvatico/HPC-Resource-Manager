@@ -1,6 +1,6 @@
 #ifndef MOCK_RESOURCE_MANAGER_POOL_H
 #define MOCK_RESOURCE_MANAGER_POOL_H
-#include "network_core.h"
+#include "../comms/server_types.h"
 typedef enum {
     ACTION_RESPOND,           // Enviar un mensaje a un fd ya conectado
     ACTION_CHECK_DEADNODES, // Conectarse a un nuevo nodo y enviarle un mensaje

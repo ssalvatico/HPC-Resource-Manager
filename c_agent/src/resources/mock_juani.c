@@ -1,4 +1,4 @@
-#include "../include/mock_resource_manager.h"
+#include "../include/resources/mock_resource_manager.h"
 #include <stdio.h>
 
 void master_function(node_data_t NODE, const char * SENDER_IP, unsigned SOCKET, const char * BUFFER, out_msg_t * outbox, int * outbox_count, JuaniAction action) {

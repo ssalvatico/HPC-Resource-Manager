@@ -2,24 +2,23 @@
 # Configuración del Compilador
 # ==========================================
 CC = gcc
-# -Wall -Wextra: Muestra todas las advertencias (buenas prácticas)
-# -g: Permite usar GDB para debuggear
-# -Iinclude: Le dice al compilador que busque los .h en la carpeta "include"
-# -pthread: Obligatorio para compilar código multihilo en Linux
-CFLAGS = -Wall -Wextra -g -Iinclude -pthread
+
+# -Iinclude : Le dice que busque en la carpeta base "include"
+# -Iinclude/comms y -Iinclude/resources : Le dice que también busque dentro de las subcarpetas.
+# Esto es vital para que no tire error si en tus .c pusiste #include "sys_sockets.h" 
+# en lugar de #include "comms/sys_sockets.h".
+CFLAGS = -Wall -Wextra -g -Iinclude -Iinclude/comms -Iinclude/resources -pthread
 
 # Nombre del archivo ejecutable final
 TARGET = c_agent
 
 # ==========================================
-# Archivos del Proyecto
+# Archivos del Proyecto (¡Automatizado!)
 # ==========================================
-# Lista de todos tus archivos fuente (.c)
-SRCS = main.c src/network_core.c src/thread_pool.c src/mock_juani.c
-
-# Si Juani ya te pasó su archivo con la lógica (ej: resource_manager.c), 
-# descomenta la línea de abajo y borra la de arriba:
-# SRCS = main.c src/network_core.c src/thread_pool.c src/resource_manager.c
+# main.c + Todos los .c dentro de comms + Todos los .c dentro de resources
+SRCS = main.c \
+       $(wildcard src/comms/*.c) \
+       $(wildcard src/resources/*.c)
 
 # Transforma automáticamente la lista de .c en una lista de .o (Objetos)
 OBJS = $(SRCS:.c=.o)
@@ -37,12 +36,12 @@ $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "¡Compilación exitosa! Ejecuta con: ./$(TARGET) <puerto> <ip>"
 
-# Regla genérica para compilar cada .c en un .o
+# Regla genérica para compilar cada .c en un .o en su respectiva carpeta
 %.o: %.c
 	@echo "Compilando $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Regla para limpiar los archivos compilados al escribir "make clean"
+# Regla para limpiar los archivos compilados
 clean:
 	@echo "Limpiando archivos binarios..."
 	rm -f $(OBJS) $(TARGET)

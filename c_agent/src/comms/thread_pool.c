@@ -1,4 +1,6 @@
-#include "thread_pool.h"
+#include "../include/comms/thread_pool.h"
+#include "../include/comms/sys_epoll.h"
+#include "../include/comms/event_handler.h"
 #include <pthread.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -40,7 +42,7 @@ static void* worker_thread(void* arg) {
         queue.count--;
         pthread_mutex_unlock(&queue.lock);
 
-        // ¡El Switch que distribuye el trabajo!
+        // ¡El Switch que distribuye el trabajo!inc
         switch (current_task.type) {
             case TASK_TCP_CLIENT_MSG:
                 if(handle_client_message(ctx, current_task.fd))rearm_epoll_fd(ctx->epollfd, current_task.fd);
