@@ -138,7 +138,7 @@ int accept_tcp_connection(const int server_fd, char* client_ip_buffer) {
         char* ip_string = inet_ntoa(client_addr.sin_addr);
         strcpy(client_ip_buffer, ip_string);
     }
-
+    // ACA PUEDO GUARDAS LOS FILE DESCRIPTORS
     // make socket non blocking
     int flags = fcntl(client_fd, F_GETFL, 0);
     fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
