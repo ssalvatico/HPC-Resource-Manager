@@ -194,7 +194,7 @@ static void th_eliminar(TablaHash tabla, void * dato,
   for(int idx = tabla -> hash(dato) % cap, i = 0 ; i < cap && !cond ; idx = (idx + 1) % cap, i++){
     elem = elems + idx;
 
-    if(elem -> dato == NULL)
+    if(elem -> dato == NULL && elem->fdelete == 0)
       cond = 1;                                   // Se ha llegado al final del Cluster
 
     else if(elem -> fdelete == 0 && comp(elem -> dato, dato) == 0)
