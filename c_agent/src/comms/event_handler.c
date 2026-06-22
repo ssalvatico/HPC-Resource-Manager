@@ -242,6 +242,8 @@ void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count) {
         } 
         // CASO B: Abrimos conexion asincrona
         else {
+            // puede que juani mande un granted a un nodo muerto si el fd destino no esta en la lista
+            // arreglar
             int new_fd = connect_to_tcp_node(outbox[i].target_ip, outbox[i].target_port);
             if (new_fd != -1) {
                 if (new_fd < MAX_FDS) {
