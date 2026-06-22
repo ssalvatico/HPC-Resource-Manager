@@ -8,6 +8,8 @@
 -define(TIMEOUT, 5000).
 -define(WORK_TIME, 15000).
 -define(N_REQUESTS, 1).
+-define(TEST, false).
+
 
 -record(logInfo,{
     status,

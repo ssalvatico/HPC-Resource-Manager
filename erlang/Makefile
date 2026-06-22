@@ -12,7 +12,9 @@ job_scheduler.beam: header.hrl job_scheduler.erl
 
 run:
 	erl -noshell -eval "erlang_c_bridge:init(), timer:sleep(infinity)"
-	
+
+run_test:
+	erl -noshell -eval "erlang_c_bridge:init(8000, 3, true), timer:sleep(infinity)"
 
 clear:
 	rm -f *.beam
