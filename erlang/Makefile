@@ -22,7 +22,7 @@ run: build
 
 run_test: build
 	erl -pa $(EBIN) -noshell \
-	    -eval "erlang_c_bridge:init(8000, 3, true), timer:sleep(infinity)"
+	    -eval "os:putenv(\"ENV\", \"test\"), erlang_c_bridge:init(8000, 3, true), timer:sleep(infinity)"
 
 clear:
 	rm -rf $(EBIN)
