@@ -175,7 +175,8 @@ generate_job_request(JobId, NodeRecordList, Test) ->
     false -> lists:sort(fun ({Ip1, Resource1, _}, {Ip2, Resource2, _}) -> {Ip1, Resource1} =< {Ip2, Resource2} end, AvailableResources)
   end,
   JobRequest = "JOB_REQUEST " ++ integer_to_list(JobId),
-  {lists:foldl(fun build_job_request/2, JobRequest, SortedResources), SortedResources}.
+  JobRequest2 = lists:foldl(fun build_job_request/2, JobRequest, SortedResources) ++ "\n",
+  {JobRequest2, SortedResources}.
 
 
 
@@ -240,5 +241,5 @@ build_job_request({Ip, Name, Amount}, Acc) ->
 simulate_load(JobId, State1, InitPid) ->
   timer:sleep(rand:uniform(?WORK_TIME)),
   event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "Executing job...", JobId),
-  maps:get(sender_pid, State1) ! {job_directive, JobId, "JOB_RELEASE " ++ integer_to_list(JobId)},
+  maps:get(sender_pid, State1) ! {job_directive, JobId, "JOB_RELEASE " ++ integer_to_list(JobId) ++ "\n"},
   InitPid ! {job_release, JobId}.
