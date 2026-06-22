@@ -1,0 +1,5 @@
+# Erlang build and runtime artifacts
+/erlang/*.beam
+/erlang/event_logger.txt
+/erlang/erl_crash.dump
+/erlang/.DS_Store
