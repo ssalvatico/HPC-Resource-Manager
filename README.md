@@ -1,11 +1,7 @@
-# HPC-Resource-Manager
+# HPC-Resource-Manager - How To Run
 
 
-
-
-### Erlang Scheduler
-
-### Step 1 — Compile the Erlang modules
+### Step 1 — Compile the modules
 Run the following command to compile all Erlang source files:
 
 *make*
@@ -13,7 +9,7 @@ Run the following command to compile all Erlang source files:
 This will generate `.beam` files for `erlang_c_bridge`, `event_logger` 
 and `job_scheduler`.
 
-### Step 2 — Start the C Agent
+### Step 2 — Start the C Agent + Erlang Agent
 Before starting the scheduler, make sure the C agent is already running 
 and listening on the host and port defined in `header.hrl`. 
 The scheduler will try to connect to it automatically.

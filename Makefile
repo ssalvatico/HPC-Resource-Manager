@@ -1,8 +1,14 @@
 ERLANG_DIR = erlang
 C_DIR = c_agent
 
+all: c-build erlang-build
+
+run: c-run erlang-run
+
+clear: c-clear erlang-clear
+
 c-build:
-	$(MAKE) -C $(C_DIR) all
+	$(MAKE) -C $(C_DIR)
 
 c-run:
 	$(MAKE) -C $(C_DIR) run

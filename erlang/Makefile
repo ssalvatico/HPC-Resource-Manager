@@ -27,5 +27,6 @@ run_test: build
 clear:
 	rm -rf $(EBIN)
 	rm -f event_logger.txt
+	rm -f *.dump
 
 .PHONY: build run run_test clear

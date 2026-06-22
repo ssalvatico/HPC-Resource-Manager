@@ -8,7 +8,7 @@ SRCS = main.c \
 
 OBJDIR = c_build
 
-OBJS = $(OBJDIR)/,$(SRCS:.c=.o)
+OBJS = $(addprefix $(OBJDIR)/,$(SRCS:.c=.o))
 
 build: c_agent
 
