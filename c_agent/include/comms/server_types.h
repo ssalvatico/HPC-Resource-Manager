@@ -22,6 +22,12 @@ typedef struct {
 } ServerContext;
 
 typedef struct {
+    int is_active;                      
+    char ip[16];                        
+    char pending_message[BUFFER_SIZE];  
+} ConnectionState;
+
+typedef struct {
     char target_ip[16];   
     int target_port;      
     int target_fd;        

@@ -6,10 +6,16 @@
 #include <stdint.h>
 #include <pthread.h>
 
-typedef struct {
-    char ip[16];
-    char message[BUFFER_SIZE];
-} AsyncPending;
+typedef enum {
+    ACTION_RESPOND,           // Enviar un mensaje a un fd ya conectado
+    ACTION_CHECK_DEADNODES, // Conectarse a un nuevo nodo y enviarle un mensaje
+    ACTION_GET_RESOURCES,    // Solicitar recursos a un nodo (puede implicar conectarse)
+    ACTION_NEW_NODE_DISCOVERED, // Se descubrió un nuevo nodo (UDP) → conectar y enviar
+    ACTION_DISCONNECTED,
+    ACTION_NONE               // No hacer nada
+} JuaniAction;
+
+#define MAX_OUTBOX 50
 
 /**
  * @brief Handles the expiration of the TCP startup timer.

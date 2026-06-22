@@ -1,14 +1,14 @@
 #include "../../include/comms/event_handler.h"
 #include "../../include/comms/sys_sockets.h"
 #include "../../include/comms/sys_epoll.h"
+#include "../../include/comms/server_types.h"
 #include "../../include/resources/mock_resource_manager.h"
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
-pthread_rwlock_t pending_msg_lock = PTHREAD_RWLOCK_INITIALIZER;
-
-AsyncPending async_pending[MAX_FDS]; 
+ConnectionState active_connections[MAX_FDS];
+pthread_rwlock_t connections_lock = PTHREAD_RWLOCK_INITIALIZER;
 
 /*
  *
@@ -70,7 +70,9 @@ void handle_udp_timer_expiration(ServerContext* ctx) {
     // formtateado con la norma de announce
     out_msg_t outbox[1];
     int outbox_count = 0;
-    master_function(ctx->mynode, NULL, 0, NULL, outbox, &outbox_count, ACTION_GET_RESOURCES);
+    // we shall send the port on the socket parameter. Because master function need to know it
+    // in order to craft the message 
+    resource_adapter_patch(ctx->mynode, NULL, ctx->port, NULL, outbox, &outbox_count, ACTION_GET_RESOURCES);
     
     broadcast_announce(ctx->udp_fd, UDP_PORT, outbox[0].message);
 }
@@ -85,7 +87,7 @@ void handle_incoming_discovery(ServerContext* ctx) {
         // el announce del emisor y la ip en sender ip
         out_msg_t dummy_outbox[1]; 
         int dummy_count = 0;
-        master_function(ctx->mynode, sender_ip, 0, buffer, dummy_outbox, &dummy_count, ACTION_NEW_NODE_DISCOVERED);
+        resource_adapter_patch(ctx->mynode, sender_ip, 0, buffer, dummy_outbox, &dummy_count, ACTION_NEW_NODE_DISCOVERED);
     }
 }
 
@@ -99,26 +101,36 @@ void handle_new_tcp_connection(ServerContext* ctx, int server_fd) {
         } else {
             printf("[ERLANG] Planificador local conectado desde: %s (FD: %d)\n", client_ip, client_fd);
         }
+        
+        // ALTA EN EL ESTADO DE RED
+        pthread_rwlock_wrlock(&connections_lock);
+        active_connections[client_fd].is_active = 1;
+        strncpy(active_connections[client_fd].ip, client_ip, 16);
+        active_connections[client_fd].pending_message[0] = '\0';
+        pthread_rwlock_unlock(&connections_lock);
+        
         add_to_epoll_interest_list(ctx->epollfd, client_fd, EPOLLIN | EPOLLONESHOT);
     }
 }
 
 int handle_client_message(ServerContext* ctx, int curr_fd) {
-    char peer_ip[16];
-    get_ip_from_fd(curr_fd, peer_ip);
+    char target_ip[16];
+    pthread_rwlock_rdlock(&connections_lock);
+    strncpy(target_ip, active_connections[curr_fd].ip, 16);
+    pthread_rwlock_unlock(&connections_lock);
     
     char recv_buffer[BUFFER_SIZE];
     ssize_t bytes_read = receive_tcp_message(curr_fd, recv_buffer, BUFFER_SIZE);
     
-    out_msg_t outbox[10];
+    out_msg_t outbox[MAX_OUTBOX];
     int outbox_count = 0;
     
     if (bytes_read > 0) {
-        printf("Msg received (FD %d - IP: %s): %s\n", curr_fd, peer_ip, recv_buffer);
+        printf("Msg received (FD %d - IP: %s): %s\n", curr_fd, target_ip, recv_buffer);
         
 
         // Juani modifica el outbox segun si quiere responder o no, el lo decide
-        master_function(ctx->mynode, peer_ip, curr_fd, recv_buffer, outbox, &outbox_count, ACTION_RESPOND);
+        resource_adapter_patch(ctx->mynode, target_ip, curr_fd, recv_buffer, outbox, &outbox_count, ACTION_RESPOND);
 
         // mandamos lo que nos dijo juani
         send_outbox(ctx, outbox, outbox_count);
@@ -130,12 +142,18 @@ int handle_client_message(ServerContext* ctx, int curr_fd) {
             printf("Unexpected disconnection (FD %d)\n", curr_fd);
         }
         
-        master_function(ctx->mynode, peer_ip, curr_fd, NULL, outbox, &outbox_count, ACTION_DISCONNECTED);
+        resource_adapter_patch(ctx->mynode, target_ip, curr_fd, NULL, outbox, &outbox_count, ACTION_DISCONNECTED);
         send_outbox(ctx, outbox, outbox_count);
         
         remove_from_epoll_interest_list(ctx->epollfd, curr_fd);
         close(curr_fd);
-        return 0;
+
+        // BAJA POR DESCONEXIÓN
+        pthread_rwlock_wrlock(&connections_lock);
+        active_connections[curr_fd].is_active = 0;
+        active_connections[curr_fd].ip[0] = '\0';
+        active_connections[curr_fd].pending_message[0] = '\0';
+        pthread_rwlock_unlock(&connections_lock);
     }
     return 1;
 }
@@ -144,42 +162,39 @@ void handle_connection_success(ServerContext* ctx, int curr_fd) {
     int result;
     socklen_t result_len = sizeof(result);
     
-    
-    if (getsockopt(curr_fd, SOL_SOCKET, SO_ERROR, &result, &result_len) < 0 || result != 0) {
-    
-        char failed_ip[16];
-        pthread_rwlock_rdlock(&pending_msg_lock);
-        strncpy(failed_ip, async_pending[curr_fd].ip, 16);
-        pthread_rwlock_unlock(&pending_msg_lock);
+    // Rescatar IP de forma segura
+    char target_ip[16];
+    pthread_rwlock_rdlock(&connections_lock);
+    strncpy(target_ip, active_connections[curr_fd].ip, 16);
+    pthread_rwlock_unlock(&connections_lock);
 
-        printf("Failed to connect to node IP: (%s).\n", failed_ip);
+    if (getsockopt(curr_fd, SOL_SOCKET, SO_ERROR, &result, &result_len) < 0 || result != 0) {
+        printf("Failed to connect to node IP: (%s).\n", target_ip);
         
-        out_msg_t outbox[10];
+        out_msg_t outbox[MAX_OUTBOX];
         int outbox_count = 0;
-        master_function(ctx->mynode, failed_ip, curr_fd, "CONNECT_FAILED", outbox, &outbox_count, ACTION_DISCONNECTED);
+        resource_adapter_patch(ctx->mynode, target_ip, curr_fd, "CONNECT_FAILED", outbox, &outbox_count, ACTION_DISCONNECTED);
         send_outbox(ctx, outbox, outbox_count);
         
-        // Limpiar el mensaje fantasma
-        pthread_rwlock_wrlock(&pending_msg_lock);
-        async_pending[curr_fd].message[0] = '\0';
-        async_pending[curr_fd].ip[0] = '\0'; // Buena práctica limpiar también la IP
-        pthread_rwlock_unlock(&pending_msg_lock);
+        // BAJA POR FALLO
+        pthread_rwlock_wrlock(&connections_lock);
+        active_connections[curr_fd].is_active = 0;
+        active_connections[curr_fd].ip[0] = '\0';
+        active_connections[curr_fd].pending_message[0] = '\0';
+        pthread_rwlock_unlock(&connections_lock);
 
         remove_from_epoll_interest_list(ctx->epollfd, curr_fd);
         close(curr_fd);
         return; 
     }
 
-    char peer_ip[16];
-    get_ip_from_fd(curr_fd, peer_ip); // IP para los logs y Juani a esta altura no deberia de dar error
+    printf("Connected succesfully to %s (FD: %d)\n", target_ip, curr_fd);
     
-    printf("Connected succesfully to %s (FD: %d)\n", peer_ip, curr_fd);
-    
-    // Leer el buffer, enviarlo y limpiarlo de forma segura
-    pthread_rwlock_wrlock(&pending_msg_lock);
-    send_tcp_message(curr_fd, async_pending[curr_fd].message);
-    async_pending[curr_fd].message[0] = '\0';
-    pthread_rwlock_unlock(&pending_msg_lock);
+    // bien paso borramos el mensaje pendiente pero dejamos la badera en 1
+    pthread_rwlock_wrlock(&connections_lock);
+    send_tcp_message(curr_fd, active_connections[curr_fd].pending_message);
+    active_connections[curr_fd].pending_message[0] = '\0';
+    pthread_rwlock_unlock(&connections_lock);
 
     struct epoll_event mod_event;
     mod_event.events = EPOLLIN | EPOLLONESHOT;
@@ -191,11 +206,11 @@ void handle_gc_timer_expiration(ServerContext* ctx) {
     uint64_t exp;
     read(ctx->gc_timerfd, &exp, sizeof(uint64_t)); // Limpiar el timer
     
-    out_msg_t outbox[10];
+    out_msg_t outbox[MAX_OUTBOX];
     int outbox_count = 0;
     
     // juani revisa nodos 
-    master_function(
+    resource_adapter_patch(
         ctx->mynode, 
         NULL,           // No hay IP
         -1,             // No hay socket
@@ -211,22 +226,39 @@ void handle_gc_timer_expiration(ServerContext* ctx) {
 
 void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count) {
     for (int i = 0; i < outbox_count; i++) {
-        if (outbox[i].target_fd != -1) {
-            send_tcp_message(outbox[i].target_fd, outbox[i].message);
-        } else {
+        
+        int target = outbox[i].target_fd;
+        
+        // 2. Si el adaptador NO sabe el FD (nos pasa -1), entonces si buscamos por IP
+        // esto es para que en conexiones donde se repite la ip pero con distinto fd como 
+        // el cliete erlang, no tenga errores, lo deberia de mandar mi funcin master
+        if (target == -1) {
+            target = find_fd_by_ip(outbox[i].target_ip);
+        }
+
+        // CASO A: Existe conexion 
+        if (target != -1) {
+            send_tcp_message(target, outbox[i].message);
+        } 
+        // CASO B: Abrimos conexion asincrona
+        else {
             int new_fd = connect_to_tcp_node(outbox[i].target_ip, outbox[i].target_port);
-            if (new_fd != -1 && new_fd < MAX_FDS) {
-                
-                // Guardamos el mensaje en la nueva tabla minimalista
-                pthread_rwlock_wrlock(&pending_msg_lock);
-                strncpy(async_pending[new_fd].ip, outbox[i].target_ip, 16);
-                strncpy(async_pending[new_fd].message, outbox[i].message, BUFFER_SIZE - 1);
-                async_pending[new_fd].message[BUFFER_SIZE - 1] = '\0';
-                pthread_rwlock_unlock(&pending_msg_lock);
-                
-                add_to_epoll_interest_list(ctx->epollfd, new_fd, EPOLLIN | EPOLLOUT);
-            }else{
-                close(new_fd);
+            if (new_fd != -1) {
+                if (new_fd < MAX_FDS) {
+                    
+                    // Guardamos el estado unificado
+                    pthread_rwlock_wrlock(&connections_lock);
+                    active_connections[new_fd].is_active = 1;
+                    strncpy(active_connections[new_fd].ip, outbox[i].target_ip, 16);
+                    strncpy(active_connections[new_fd].pending_message, outbox[i].message, BUFFER_SIZE - 1);
+                    active_connections[new_fd].pending_message[BUFFER_SIZE - 1] = '\0';
+                    pthread_rwlock_unlock(&connections_lock);
+                    
+                    add_to_epoll_interest_list(ctx->epollfd, new_fd, EPOLLIN | EPOLLOUT);
+                } else {
+                    printf("Warning: FD limit reached. Dropping connection to %s\n", outbox[i].target_ip);
+                    close(new_fd);
+                }
             }
         }
     }
@@ -240,4 +272,18 @@ void get_ip_from_fd(int fd, char* ip_buffer) {
     } else {
         strcpy(ip_buffer, "UNKNOWN");
     }
+}
+
+int find_fd_by_ip(const char* target_ip) {
+    int found_fd = -1;
+    pthread_rwlock_rdlock(&connections_lock);
+    for (int i = 0; i < MAX_FDS; i++) {
+        // Comparamos solo si esta activa
+        if (active_connections[i].is_active && strncmp(active_connections[i].ip, target_ip, 15) == 0) {
+            found_fd = i;
+            break;
+        }
+    }
+    pthread_rwlock_unlock(&connections_lock);
+    return found_fd;
 }
