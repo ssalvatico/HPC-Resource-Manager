@@ -7,14 +7,7 @@
 
 -define(TIMEOUT, 5000).
 -define(WORK_TIME, 15000).
-
--define(RES_ORDER(Type),
-    case Type of
-        cpu -> 1;
-        gpu -> 2;
-        ram -> 3
-    end
-).
+-define(N_REQUESTS, 1).
 
 -record(logInfo,{
     status,

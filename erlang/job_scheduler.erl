@@ -1,38 +1,41 @@
 -module(job_scheduler).
 -include("header.hrl").
--export([init/0, get_node_list/1]).
+-export([init/1, get_node_list/1]).
 
 
-init() ->
-  init(#{}).
+init(NRequests) when is_integer(NRequests) ->
+  init(#{}, NRequests).
 %% i.e State = #{sender_pid => Pid, receiver_pid => Pid, JobId1 => [Resources], JobId2 => ...}
-init(State) ->
+init(State, NRequests) when is_integer(NRequests) ->
   receive
     {receiver_pid, ReceiverId} ->
       State1 = maps:put(receiver_pid, ReceiverId, State),
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] receiver_pid received", none),
-      init(State1);
+      init(State1, NRequests);
     
     {sender_pid, SenderId} ->
       State1 = maps:put(sender_pid, SenderId, State),
       spawn(fun() -> request_nodes(SenderId) end),
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] sender_pid received", none),
-      init(State1);
+      init(State1, NRequests);
     
     {job_release, JobId} ->
       State1 = maps:remove(JobId, State),
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] releasing job", JobId),
-      init(State1);
+      init(State1, NRequests);
     
     {packet_received, Packet} ->
       case handle_packet(Packet) of 
         {node_records, NodeRecordList} ->
-          JobId = erlang:unique_integer([positive]),
-          {JobRequest, AvailableResources} = generate_job_request(JobId, NodeRecordList),
-          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_request", JobId),
-          SenderId = maps:get(sender_pid, State),
-          SenderId ! {job_directive, JobId, JobRequest},
-          init(State#{JobId => {pending, AvailableResources}});
+          NewState = lists:foldl(fun(_N, StateAcc) ->
+            JobId = erlang:unique_integer([positive]),
+            {JobRequest, AvailableResources} = generate_job_request(JobId, NodeRecordList),
+            event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_request", JobId),
+            SenderId = maps:get(sender_pid, State),
+            SenderId ! {job_directive, JobId, JobRequest},
+            StateAcc#{JobId => {pending, AvailableResources}}
+          end, State, lists:seq(1, NRequests)),
+          init(NewState, NRequests);
         
         {job_granted, JobId} ->
           State1 = maps:update_with(JobId, fun ({pending, Resources}) -> {granted, Resources};
@@ -41,29 +44,29 @@ init(State) ->
                                                   throw("Invalid state transition") end, State),
           event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_granted", JobId),
           spawn(fun () -> simulate_load(JobId, State1, self()) end),
-          init(State1);
+          init(State1, NRequests);
 
         {job_denied, JobId} ->
           State1 = maps:remove(JobId, State),
           event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_denied", JobId),
-          init(State1);
+          init(State1, NRequests);
 
         {job_timeout, JobId} ->
           State1 = maps:remove(JobId, State),
           event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_timeout", JobId),
-          init(State1);
+          init(State1, NRequests);
 
         {skip, _} -> 
           event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "unknown packet received", none),
-          init(State)
+          init(State, NRequests)
       end;
     {ok, get_nodes} ->
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] get_nodes sent succesfully", none),
-      init(State);
+      init(State, NRequests);
     
-      {error, Reason} ->
+    {error, Reason} ->
       event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
-      erlang:halt()
+      halt()
   end.
 
 

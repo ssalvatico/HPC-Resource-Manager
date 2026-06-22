@@ -1,6 +1,6 @@
 -module(erlang_c_bridge).
 -include("header.hrl").
--export([init/0, init/1, conn_handler/2, sender/2, receiver/2, connect/3]).
+-export([init/0, init/2, conn_handler/2, sender/2, receiver/2, connect/3]).
 
 
 
@@ -84,11 +84,11 @@ sender(Socket, JobSchedulerId) ->
 %%% Entry point. Spawns the logger and scheduler processes, then initiates
 %%% the TCP connection to the C agent.
 init() -> 
-    init(?PORT).
+    init(?PORT, ?N_REQUESTS).
 
-init(Port) ->
+init(Port, NRequests) ->
     ServLoggerId = spawn(event_logger, init, []),
     register(eventLoggerId, ServLoggerId),
     event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, initialization, self()),
-    JobSchedulerId = spawn(job_scheduler, init, []),
+    JobSchedulerId = spawn(job_scheduler, init, [NRequests]),
     connect(Port, ?TRIES, JobSchedulerId).
