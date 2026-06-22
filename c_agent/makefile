@@ -1,50 +1,30 @@
-# ==========================================
-# Configuración del Compilador
-# ==========================================
 CC = gcc
 
-# -Iinclude : Le dice que busque en la carpeta base "include"
-# -Iinclude/comms y -Iinclude/resources : Le dice que también busque dentro de las subcarpetas.
-# Esto es vital para que no tire error si en tus .c pusiste #include "sys_sockets.h" 
-# en lugar de #include "comms/sys_sockets.h".
 CFLAGS = -Wall -Wextra -g -Iinclude -Iinclude/comms -Iinclude/resources -pthread
 
-# Nombre del archivo ejecutable final
-TARGET = c_agent
-
-# ==========================================
-# Archivos del Proyecto (¡Automatizado!)
-# ==========================================
-# main.c + Todos los .c dentro de comms + Todos los .c dentro de resources
 SRCS = main.c \
        $(wildcard src/comms/*.c) \
        $(wildcard src/resources/*.c)
 
-# Transforma automáticamente la lista de .c en una lista de .o (Objetos)
-OBJS = $(SRCS:.c=.o)
+OBJDIR = c_build
 
-# ==========================================
-# Reglas de Compilación
-# ==========================================
+OBJS = $(OBJDIR)/,$(SRCS:.c=.o)
 
-# Regla por defecto al escribir "make"
-all: $(TARGET)
+build: c_agent
 
-# Cómo construir el ejecutable final
-$(TARGET): $(OBJS)
-	@echo "Vinculando el ejecutable $@..."
+c_agent: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
-	@echo "¡Compilación exitosa! Ejecuta con: ./$(TARGET) <puerto> <ip>"
+	@echo "¡Compilación exitosa! Ejecuta con: ./c_agent <puerto> <ip>"
 
 # Regla genérica para compilar cada .c en un .o en su respectiva carpeta
-%.o: %.c
-	@echo "Compilando $<..."
+$(OBJDIR)/%.o: %.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Regla para limpiar los archivos compilados
-clean:
-	@echo "Limpiando archivos binarios..."
-	rm -f $(OBJS) $(TARGET)
+run: c_agent
+	./c_agent 8000 127.0.0.1
 
-# Indica que "all" y "clean" no son nombres de archivos
-.PHONY: all clean
+clear:
+	rm -rf $(OBJDIR) c_agent
+
+.PHONY: all run clear
