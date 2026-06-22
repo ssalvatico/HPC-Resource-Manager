@@ -9,14 +9,14 @@
 %%% Retries up to Nth_try times on failure. On success, spawns conn_handler.
 %%% Nth_try (remaining attempts), JobSchedulerId (scheduler PID)
 connect(_Port, 0, JobSchedulerId) ->
-    event_logger:log_event(close, {?MODULE, ?FUNCTION_NAME}, "Out of tries", none),
+    event_logger:log_event(close, {?MODULE, ?FUNCTION_NAME}, "OUT OF TRIES", none),
     JobSchedulerId ! {error, "Out of tries"},
     timer:sleep(500),
     erlang:halt();
 connect(Port, Nth_try, JobSchedulerId) ->
     case gen_tcp:connect(?HOST , Port , [binary, {active, false}] , ?TIMEOUT) of
         {ok, Socket} ->
-            event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "Connection succesful", none),
+            event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "CONNECTION SUCCESSFUL", none),
             spawn(?MODULE, conn_handler, [Socket, JobSchedulerId]);
     
         {error, Reason} -> 
@@ -44,7 +44,6 @@ receiver(Socket, JobSchedulerId) ->
     case gen_tcp:recv(Socket, 0, infinity) of
         {ok, Packet} ->
             JobSchedulerId ! {packet_received, Packet},
-            event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "C response", none),
                                 receiver(Socket, JobSchedulerId);
         {error, Reason} ->
             JobSchedulerId ! {error, Reason},
@@ -63,7 +62,6 @@ sender(Socket, JobSchedulerId) ->
         {get_nodes} ->
             case gen_tcp:send(Socket, <<"GET_NODES">>) of
                 ok ->
-                    event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "Node list requested", none),
                     JobSchedulerId ! {ok, get_nodes};
                 {error, Reason} ->
                     event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
@@ -73,7 +71,6 @@ sender(Socket, JobSchedulerId) ->
         {job_directive, JobId, Packet} ->
             case gen_tcp:send(Socket, Packet) of
                 ok ->
-                    event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, job_directive, JobId),
                     JobSchedulerId ! {ok, JobId, job_directive};
                 {error, Reason} ->
                     event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, JobId),
