@@ -60,7 +60,7 @@ receiver(Socket, JobSchedulerId) ->
 sender(Socket, JobSchedulerId) ->
     receive
         {get_nodes} ->
-            case gen_tcp:send(Socket, <<"GET_NODES">>) of
+            case gen_tcp:send(Socket, <<"GET_NODES\n">>) of
                 ok ->
                     JobSchedulerId ! {ok, get_nodes};
                 {error, Reason} ->
