@@ -172,13 +172,18 @@ generate_job_request(JobId, NodeRecordList, Test) ->
   % i.e [ {"192.168.1.2",[{cpu,2}, {mem,100}]}, {"192.168.1.1", [{cpu,4}, {gpu,1}]} ]
   SortedResources = case Test of 
     true -> AvailableResources;
-    false -> lists:sort(fun ({Ip1, Resource1, _}, {Ip2, Resource2, _}) -> {Ip1, Resource1} =< {Ip2, Resource2} end, AvailableResources)
+    false -> lists:sort(fun ({Ip1, Resource1, _}, {Ip2, Resource2, _}) ->
+                          {Ip1, resource_order(Resource1)} =< {Ip2, resource_order(Resource2)}
+                        end, AvailableResources)
   end,
   JobRequest = "JOB_REQUEST " ++ integer_to_list(JobId),
   JobRequest2 = lists:foldl(fun build_job_request/2, JobRequest, SortedResources) ++ "\n",
   {JobRequest2, SortedResources}.
 
-
+%% This order is to be in the same page with other class groups.
+resource_order(cpu) -> 1;
+resource_order(mem) -> 2;
+resource_order(gpu) -> 3.
 
 %%% Shuffles a list using random float keys. Used to randomize node/resource selection.
 shuffle(NodeRecordList) ->
