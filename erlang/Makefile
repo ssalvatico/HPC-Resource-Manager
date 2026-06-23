@@ -1,22 +1,30 @@
-MODULES = erlang_c_bridge event_logger job_scheduler
-BEAMS = $(addsuffix .beam,$(MODULES))
+EBIN = ebin
 
-build: $(BEAMS)
+MODULES = \
+	erlang_c_bridge \
+	event_logger \
+	job_scheduler
 
-%.beam: %.erl header.hrl
-	erlc -o . $<
+$(EBIN):
+	mkdir -p $(EBIN)
+
+build: $(EBIN) $(MODULES:%=$(EBIN)/%.beam)
+
+$(EBIN)/%.beam: %.erl header.hrl
+	erlc -o $(EBIN) $<
 
 run: build
-	erl -pa . -noshell \
-	-eval "erlang_c_bridge:init(), timer:sleep(infinity)"
+	erl -pa $(EBIN) -noshell \
+		-eval "erlang_c_bridge:init(), timer:sleep(infinity)"
 
 run_test: build
-	erl -pa . -noshell \
-	    -eval "os:putenv(\"ENV\", \"test\"), erlang_c_bridge:init(8000, 3, true), timer:sleep(infinity)"
+	erl -pa $(EBIN) -noshell \
+		-eval "os:putenv(\"ENV\", \"test\"), erlang_c_bridge:init(8000,3,true), timer:sleep(infinity)"
 
-clear:
-	rm -f $(BEAMS)
-	rm -f event_logger.txt
+clean:
+	rm -rf $(EBIN)
 	rm -f *.dump
 
-.PHONY: build run run_test clear
+clear: clean
+
+.PHONY: build run run_test clean clear
