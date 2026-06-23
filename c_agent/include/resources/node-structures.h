@@ -19,11 +19,47 @@ typedef struct node_data_t_ * node_data_t;
  */
 node_data_t node_init(unsigned cpu, unsigned gpu, unsigned ram);
 
-void        node_dest   (node_data_t node);
+/**
+ * @brief Frees all memory associated with a node data structure.
+ *
+ * Destroys all internal hash tables and the local resource pool,
+ * including all pending FIFO request queues for each resource type.
+ *
+ * @param node Pointer to the node_data_t structure to destroy.
+ * @return Void.
+ */
+void node_dest(node_data_t node);
 
-unsigned    master_function(node_data_t NODE, char * NODE_IP, unsigned SOCKET, const char * BUFFER, char * OUT, unsigned OUT_SIZE);
+/**
+ * @brief Processes an incoming protocol message and updates internal state.
+ *
+ * Central dispatch function. Parses the command in BUFFER and executes
+ * the corresponding logic: registering nodes (ANNOUNCE), managing resource
+ * reservations and releases (RESERVE, RELEASE), handling job lifecycle
+ * (JOB_REQUEST, JOB_RELEASE), and processing inter-agent responses
+ * (GRANTED, DENIED). Writes a response string to OUT when applicable.
+ *
+ * @param NODE   Pointer to the local node data structure.
+ * @param NODE_IP IP address of the sender.
+ * @param SOCKET File descriptor of the connection (used as job key).
+ * @param BUFFER Null-terminated string containing the incoming protocol message.
+ * @param OUT    Buffer where the response message will be written, if any.
+ * @param OUT_SIZE Maximum size of the OUT buffer.
+ * @return SOLVED (2) on success, WAIT (1) if queued, ERROR (0) on failure.
+ */
+unsigned master_function(node_data_t NODE, char * NODE_IP, unsigned SOCKET, const char * BUFFER, char * OUT, unsigned OUT_SIZE);
 
-void        known_nodes_del_inactive_nodes(node_data_t node);
+/**
+ * @brief Removes nodes that have not sent an ANNOUNCE within the timeout period.
+ *
+ * Iterates over the known nodes table and eliminates any entry whose
+ * last_seen timestamp exceeds TIMEOUT seconds. Called periodically by
+ * the garbage collector timer.
+ *
+ * @param node Pointer to the local node data structure.
+ * @return Void.
+ */
+void known_nodes_del_inactive_nodes(node_data_t node);
 
 /**
  * @brief Checks if any queued resource request can now be fulfilled.
@@ -74,8 +110,31 @@ unsigned get_job_data(node_data_t NODE, unsigned job_id, char * arr_ip[], resour
  */
 void get_local_resources(node_data_t NODE, unsigned * cpu_quantity, unsigned * gpu_quantity, unsigned * mem_quantity);
 
-unsigned    get_node_port(node_data_t NODE, const char * ip);
+/**
+ * @brief Looks up the TCP port of a known node by its IP address.
+ *
+ * Searches the known nodes hash table for an entry matching the given IP
+ * and returns its registered port. Used by the adapter to route outgoing
+ * RESERVE and RELEASE messages to the correct remote agent.
+ *
+ * @param NODE Pointer to the local node data structure.
+ * @param ip   The IP address string to look up.
+ * @return The port number of the matching node, or 0 if not found.
+ */
+unsigned get_node_port(node_data_t NODE, const char * ip);
 
-void        release_jobs_by_socket(node_data_t NODE, unsigned socket);
+/**
+ * @brief Removes all pending resource requests associated with a given socket.
+ *
+ * Iterates over the FIFO request queues for all resource types and removes
+ * any entry whose socket field matches the given value. Called when a
+ * connection drops unexpectedly to prevent orphaned requests from blocking
+ * resources indefinitely.
+ *
+ * @param NODE   Pointer to the local node data structure.
+ * @param socket The file descriptor of the disconnected connection.
+ * @return Void.
+ */
+void release_jobs_by_socket(node_data_t NODE, unsigned socket);
 
 #endif
