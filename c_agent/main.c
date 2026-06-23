@@ -2,7 +2,7 @@
 #include "include/comms/server_types.h"
 #include "include/comms/event_handler.h"
 #include "include/comms/thread_pool.h"
-#include "include/resources/mock_resource_manager.h"
+#include "include/resources/node-structures.h"
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <stdlib.h>
@@ -21,12 +21,15 @@ void handle_sigint(int sig) {
     server_running = 0; // Rompe el bucle principal
 }
 
-// parametro 1 programa 2 puerto 3 ip publica
+/**
+ * @param argc program executable
+ * @param argv array with [ip, port, cpu, mem, gpu]
+ * */ 
 int main(int argc, char *argv[]) {
     // 1. Inicialización limpia y encapsulada
     ServerContext ctx;
     init_server(&ctx, argc, argv);
-    node_data_t my_node;
+    node_data_t my_node = node_init((unsigned)atoi(argv[3]), (unsigned)atoi(argv[4]), (unsigned)atoi(argv[5]));
     ctx.mynode = &my_node;
     init_thread_pool(&ctx, NUM_THREADS);
 
