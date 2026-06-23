@@ -20,7 +20,7 @@ void handle_sigint(int sig) {
     server_running = 0; // Rompe el bucle principal
 }
 
-// ./c_agent <puerto> <ip> <cpu> <gpu> <ram>
+// ./c_agent <ip> <puerto> <cpu> <gpu> <ram>
 int main(int argc, char *argv[]) {
     // 1. Inicialización limpia y encapsulada
     ServerContext ctx;

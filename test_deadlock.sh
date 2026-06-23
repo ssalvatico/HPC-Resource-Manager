@@ -35,7 +35,7 @@ make -C "$CAGENT_DIR" build
 make -C "$ERLANG_DIR" clear
 make -C "$ERLANG_DIR" build
 
-"$CAGENT_DIR/c_agent" "$PORT" "$IP" "$CPU" "$GPU" "$MEM" &
+"$CAGENT_DIR/c_agent" "$IP" "$PORT" "$CPU" "$GPU" "$MEM" &
 C_PID=$!
 
 erl -pa "$ERLANG_DIR" -noshell -eval "erlang_c_bridge:init($PORT, 1, false), timer:sleep(infinity)"

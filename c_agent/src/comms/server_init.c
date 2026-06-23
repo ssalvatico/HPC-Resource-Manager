@@ -8,7 +8,7 @@
 
 void init_server(ServerContext* ctx, int argc, char *argv[]) {
     if(argc != 6) {
-        fprintf(stderr, "Usage: %s <puerto> <ip> <cpu> <gpu> <ram>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <ip> <puerto> <cpu> <gpu> <ram>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
