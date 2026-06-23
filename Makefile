@@ -3,9 +3,13 @@ C_DIR = c_agent
 
 all: c-build erlang-build
 
-run: c-run erlang-run
+run: c-run
 
-clear: c-clear erlang-clear
+runclient: erlang-run
+
+clean: c-clean erlang-clean
+
+clear: clean
 
 c-build:
 	$(MAKE) -C $(C_DIR)
@@ -13,8 +17,8 @@ c-build:
 c-run:
 	$(MAKE) -C $(C_DIR) run
 
-c-clear:
-	$(MAKE) -C $(C_DIR) clear
+c-clean:
+	$(MAKE) -C $(C_DIR) clean
 
 erlang-build:
 	$(MAKE) -C $(ERLANG_DIR) build
@@ -22,8 +26,10 @@ erlang-build:
 erlang-run:
 	$(MAKE) -C $(ERLANG_DIR) run
 
-erlang-clear:
-	$(MAKE) -C $(ERLANG_DIR) clear
+erlang-clean:
+	$(MAKE) -C $(ERLANG_DIR) clean
 
-
-.PHONY: c-build c-run c-clean erlang-build erlang-run erlang-clear
+.PHONY: \
+	all run clean clear \
+	c-build c-run c-clean \
+	erlang-build erlang-run erlang-clean

@@ -29,8 +29,7 @@ int main(int argc, char *argv[]) {
     // 1. Inicialización limpia y encapsulada
     ServerContext ctx;
     init_server(&ctx, argc, argv);
-    node_data_t my_node = node_init((unsigned)atoi(argv[3]), (unsigned)atoi(argv[4]), (unsigned)atoi(argv[5]));
-    ctx.mynode = &my_node;
+    ctx.mynode = node_init((unsigned)atoi(argv[3]), (unsigned)atoi(argv[4]), (unsigned)atoi(argv[5]));
     init_thread_pool(&ctx, NUM_THREADS);
 
     //signal(SIGINT, handle_sigint);

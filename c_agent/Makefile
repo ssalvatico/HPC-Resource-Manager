@@ -1,11 +1,11 @@
-# Nombre del ejecutable final
-TARGET = c_agent
+# Ejecutable
+TARGET = build/c_agent
 
-# Compilador y banderas de compilación
 CC = gcc
 CFLAGS = -Wall -Wextra -pthread -g
 
-# Archivos fuente (Mapeados exactamente según tu estructura)
+INCLUDES = -Iinclude
+
 SRCS = main.c \
        src/comms/event_handler.c \
        src/comms/resource_adapter.c \
@@ -17,25 +17,35 @@ SRCS = main.c \
        src/resources/queues.c \
        src/resources/tablahash.c
 
-# Generar automáticamente los nombres de los archivos objeto (.o)
-OBJS = $(SRCS:.c=.o)
+OBJS = $(SRCS:%.c=build/%.o)
 
-# Regla principal por defecto (cuando escribes "make")
 all: $(TARGET)
 
-# Regla de Enlazado (Linker): Junta todos los .o en el ejecutable final
+# Crear directorios automáticamente
+build:
+	mkdir -p build
+
+build/src/comms:
+	mkdir -p build/src/comms
+
+build/src/resources:
+	mkdir -p build/src/resources
+
+# Link
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
-# Regla de Compilación: Convierte cada .c en su respectivo .o
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+# Compile
+build/%.o: %.c | build build/src/comms build/src/resources
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-# Limpiar los archivos generados
+run: $(TARGET)
+	./build/c_agent 127.0.0.1 8000 4 8192 1
+
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -rf build
 
-# Alias por si prefieres escribir "make clear" en vez de "make clean"
 clear: clean
 
-.PHONY: all clean clear
+.PHONY: all run clean clear

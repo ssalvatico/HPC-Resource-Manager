@@ -86,8 +86,12 @@ request_nodes(SenderId) ->
 %%%                        {job_denied, Id} | {job_timeout, Id} | {skip, Reason}
 handle_packet(<<"NODES ", Rest/binary>>) ->
     NodeList = get_node_list(Rest),
-    NodeRecordList = lists:map(fun get_node/1, NodeList),
-    {node_records, NodeRecordList};  
+    case NodeList of
+    [] -> {skip, "No nodes available"};
+    _ ->
+      NodeRecordList = lists:map(fun get_node/1, NodeList),
+      {node_records, NodeRecordList}  
+    end;
 handle_packet(<<"JOB_GRANTED ", Rest/binary>>) ->
     {job_granted, list_to_integer(string:trim(binary_to_list(Rest)))};
 handle_packet(<<"JOB_DENIED ", Rest/binary>>) ->
@@ -103,8 +107,10 @@ handle_packet(_) ->
 %%% Params: Packet (binary)
 get_node_list(Packet) ->
   String = binary:bin_to_list(Packet),
-  TrimedString = string:trim(String),
-  string:split(TrimedString, ";", all).
+  case String of
+    "" -> [];
+    _ -> string:split(String, ";", all)
+  end.
 
 
 

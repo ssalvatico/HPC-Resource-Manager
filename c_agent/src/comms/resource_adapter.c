@@ -20,6 +20,7 @@ static pthread_rwlock_t registry_rwlock = PTHREAD_RWLOCK_INITIALIZER; // Lock pa
 // ADAPTADOR DE RECURSOS PRINCIPAL
 // ==========================================
 void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_IP, unsigned SOCKET, const char * BUFFER, out_msg_t * outbox, int * outbox_count, JuaniAction action) {
+    NODE = (node_data_t)ctx->mynode;
     char juani_out[BUFFER_SIZE] = {0};
     if (outbox_count) *outbox_count = 0;
 
