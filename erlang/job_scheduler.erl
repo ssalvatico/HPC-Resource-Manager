@@ -254,11 +254,16 @@ pick_resources(SelectedNode) ->
   case AvailableResources of
     [] -> false;
     _ ->
+      %% COMMENTED OUT TO PICK EVERY AVAILABLE RESOURCE
+      %% TO BETTER TEST DEADLOCK with ./test_deadlock.sh
+
       % Choose how many resources pick
-      N = rand:uniform(length(AvailableResources)),
+      %% N = rand:uniform(length(AvailableResources)),
       % shuffle and take N
-      Shuffled = shuffle(AvailableResources),
-      Selected = lists:sublist(Shuffled, N),
+      
+      %% Shuffled = shuffle(AvailableResources),
+      %% Selected = lists:sublist(Shuffled, N),
+      Selected = AvailableResources,
       % For each resource, pick an amount in range
       Resources = lists:map(fun({Res, Max}) ->
                               Amount = rand:uniform(Max),
