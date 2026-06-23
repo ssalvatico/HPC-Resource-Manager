@@ -194,8 +194,6 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
         }
         pthread_rwlock_unlock(&registry_rwlock); // <-- LIBERACIÓN DEL CANDADO DE RED
 
-        pthread_rwlock_unlock(&registry_rwlock); // <-- LIBERACIÓN DEL CANDADO DE RED
-
         // FASE 2: LOCK DE NEGOCIO (Aplicar los cambios cacheados sin estorbar la red)
         pthread_mutex_lock(&juani_mutex);
         for (int k = 0; k < loopback_count; k++) {
@@ -210,7 +208,7 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
     if (action == ACTION_NEW_NODE_DISCOVERED) {
         unsigned discovered_port, cpu, gpu, ram;
         if(parse_announce(BUFFER, &discovered_port, &cpu, &ram, &gpu)){
-            //command_announce(NODE, SENDER_IP, discovered_port, cpu, ram, gpu);
+            command_announce(NODE, SENDER_IP, discovered_port, cpu, ram, gpu);
         }
         return;
     }
