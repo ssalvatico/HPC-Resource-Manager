@@ -87,7 +87,7 @@ init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
 %%% Runs indefinitely.
 %%% Params: SenderId (sender process PID)
 request_nodes(SenderId) ->
-  timer:sleep(5000),
+  timer:sleep(?GET_NODES_INTERVAL),
   SenderId ! {get_nodes},
   request_nodes(SenderId).
 
@@ -223,11 +223,9 @@ pick_random(N, NodeRecordList) ->
 pick_resources(SelectedNode) ->
   NodeResources = [{cpu, SelectedNode#node.cpu}, {mem, SelectedNode#node.mem}, {gpu, SelectedNode#node.gpu}],
   % Only consider available resources per Node
-  io:fwrite("NODE RESOURCES ~p ~n", [NodeResources]),
   AvailableResources = lists:filter(fun ({_, undefined}) -> false;
                                         ({_, N}) when is_integer(N), N > 0 -> true;
                                         (_) -> false end, NodeResources),
-  io:fwrite("NODE FILTERED RESOURCES ~p ~n", [AvailableResources]),
 
   case AvailableResources of
     [] -> false;
