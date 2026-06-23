@@ -14,7 +14,7 @@ connect(_Port, 0, JobSchedulerId) ->
     timer:sleep(500),
     erlang:halt();
 connect(Port, Nth_try, JobSchedulerId) ->
-    case gen_tcp:connect(?HOST , Port , [binary, {active, false}] , ?TIMEOUT) of
+    case gen_tcp:connect(?HOST , Port , [binary, {packet, line}, {active, false}] , ?TIMEOUT) of
         {ok, Socket} ->
             event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "CONNECTION SUCCESSFUL", none),
             spawn(?MODULE, conn_handler, [Socket, JobSchedulerId]);
@@ -71,8 +71,10 @@ sender(Socket, JobSchedulerId) ->
         {job_directive, JobId, Packet} ->
             case gen_tcp:send(Socket, Packet) of
                 ok ->
+                    io:fwrite("Sent ~p to Agent", [Packet]),
                     JobSchedulerId ! {ok, JobId, job_directive};
                 {error, Reason} ->
+                    io:fwrite("Failed to sent ~p to Agent", [Packet]),
                     event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, JobId),
                     JobSchedulerId ! {error, JobId, job_directive}
             end

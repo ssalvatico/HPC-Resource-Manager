@@ -25,6 +25,8 @@ init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
       init(State1, NRequests, Test);
     
     {packet_received, Packet} ->
+      io:fwrite("PACKET RECEIVED ~p ~n", [Packet]),
+      io:fwrite("ACTUAL STATE ~p ~n", [State]),
       case handle_packet(Packet) of 
         {node_records, NodeRecordList} ->
           NewState = lists:foldl(fun(_N, StateAcc) ->
@@ -38,13 +40,23 @@ init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
           init(NewState, NRequests, Test);
         
         {job_granted, JobId} ->
-          State1 = maps:update_with(JobId, fun ({pending, Resources}) -> {granted, Resources};
-                                               ({_, _}) ->
-                                                  event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "Invalid state transition", JobId),
-                                                  throw("Invalid state transition") end, State),
-          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_granted", JobId),
-          spawn(fun () -> simulate_load(JobId, State1, self()) end),
-          init(State1, NRequests, Test);
+          case maps:get(JobId, State, undefined) of
+            {pending, Resources} ->
+              State1 = maps:put(JobId, {granted, Resources}, State),
+              SchedulerPid = self(),
+              event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_granted", JobId),
+              spawn(fun () -> simulate_load(JobId, State1, SchedulerPid) end),
+              init(State1, NRequests, Test);
+            {granted, _Resources} ->
+              event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] duplicate job_granted ignored", JobId),
+              init(State, NRequests, Test);
+            undefined ->
+              event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_granted for unknown job", JobId),
+              init(State, NRequests, Test);
+            Other ->
+              event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "Invalid state transition", JobId),
+              throw(io:format("Invalid state transition ~p", [Other]))
+          end;
 
         {job_denied, JobId} ->
           State1 = maps:remove(JobId, State),
@@ -172,8 +184,8 @@ generate_job_request(JobId, NodeRecordList, Test) ->
   % i.e [ {"192.168.1.2",[{cpu,2}, {mem,100}]}, {"192.168.1.1", [{cpu,4}, {gpu,1}]} ]
   SortedResources = case Test of 
     true -> AvailableResources;
-    false -> lists:sort(fun ({Ip1, Resource1, _}, {Ip2, Resource2, _}) ->
-                          {Ip1, resource_order(Resource1)} =< {Ip2, resource_order(Resource2)}
+    false -> lists:sort(fun ({Ip1, Port1, Resource1, _}, {Ip2, Port2, Resource2, _}) ->
+                          {Ip1, Port1, resource_order(Resource1)} =< {Ip2, Port2, resource_order(Resource2)}
                         end, AvailableResources)
   end,
   JobRequest = "JOB_REQUEST " ++ integer_to_list(JobId),
@@ -207,12 +219,16 @@ pick_random(N, NodeRecordList) ->
 
 %%% Selects a random subset of available resources from a node.
 %%% Returns {true, Resources} if resources are available, false otherwise.
-%%% Resources format: [{Ip, ResourceType, Amount}]
+%%% Resources format: [{Ip, Port, ResourceType, Amount}]
 pick_resources(SelectedNode) ->
   NodeResources = [{cpu, SelectedNode#node.cpu}, {mem, SelectedNode#node.mem}, {gpu, SelectedNode#node.gpu}],
   % Only consider available resources per Node
+  io:fwrite("NODE RESOURCES ~p ~n", [NodeResources]),
   AvailableResources = lists:filter(fun ({_, undefined}) -> false;
-                                        ({_, _}) -> true end, NodeResources),
+                                        ({_, N}) when is_integer(N), N > 0 -> true;
+                                        (_) -> false end, NodeResources),
+  io:fwrite("NODE FILTERED RESOURCES ~p ~n", [AvailableResources]),
+
   case AvailableResources of
     [] -> false;
     _ ->
@@ -225,7 +241,7 @@ pick_resources(SelectedNode) ->
       Resources = lists:map(fun({Res, Max}) ->
                               Amount = rand:uniform(Max),
                               % {cpu, 4}
-                              {SelectedNode#node.ip, Res, Amount}
+                              {SelectedNode#node.ip, SelectedNode#node.port, Res, Amount}
                             end, Selected),
       {true, Resources}
   end.
@@ -233,10 +249,10 @@ pick_resources(SelectedNode) ->
 
 
 %%% Builds a JOB_REQUEST string entry for a single resource.
-%%% Format: " @Ip:ResourceName:Amount"
-% i.e JOB REQUEST 1001 @192.168.1.2:cpu:2 @192.168.1.3:gpu:1
-build_job_request({Ip, Name, Amount}, Acc) ->
-  Acc ++ " @" ++ Ip ++ ":" ++ atom_to_list(Name) ++ ":" ++ integer_to_list(Amount).
+%%% Format: " @Ip:Port:ResourceName:Amount"
+% i.e JOB REQUEST 1001 @192.168.1.2:8000:cpu:2 @192.168.1.3:8001:gpu:1
+build_job_request({Ip, Port, Name, Amount}, Acc) ->
+  Acc ++ " @" ++ Ip ++ ":" ++ Port ++ ":" ++ atom_to_list(Name) ++ ":" ++ integer_to_list(Amount).
 
 
 
