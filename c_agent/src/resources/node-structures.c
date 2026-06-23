@@ -600,7 +600,6 @@ void command_granted    (node_data_t NODE, unsigned job_id, char *  NODE_IP, uns
         snprintf(OUT, OUT_SIZE, "JOB_GRANTED %u", job_id);    
 }
 
-void command_reserve    (node_data_t NODE, char * NODE_IP, unsigned SOCKET, unsigned job_id, resource_t type, unsigned amount){ // preguntar lucio
-    new_job_request(NODE -> resources, NODE -> active_jobs, NODE_IP, job_id, SOCKET, amount, type);
-    snprintf(OUT, OUT_SIZE, "GRANTED %u\n", out);
+unsigned command_reserve    (node_data_t NODE, char * NODE_IP, unsigned SOCKET, unsigned job_id, resource_t type, unsigned amount){ // preguntar lucio
+    return new_job_request(NODE -> resources, NODE -> active_jobs, NODE_IP, job_id, SOCKET, amount, type) ? 1 : 0;
 }

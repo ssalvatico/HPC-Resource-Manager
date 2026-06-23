@@ -39,6 +39,6 @@ void command_denied(node_data_t NODE, unsigned job_id);
 void command_granted(node_data_t NODE, unsigned job_id, char * NODE_IP, unsigned NODE_PORT);
 
 //
-void command_reserve(node_data_t NODE, char * NODE_IP, unsigned SOCKET, unsigned job_id, resource_t type, unsigned amount);
+unsigned command_reserve(node_data_t NODE, char * NODE_IP, unsigned SOCKET, unsigned job_id, resource_t type, unsigned amount);
 
 #endif
