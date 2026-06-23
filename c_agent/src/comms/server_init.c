@@ -26,8 +26,8 @@ void init_server(ServerContext* ctx, int argc, char *argv[]) {
     // udp timer config
     ctx->udp_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
     struct itimerspec its_udp = {0};
-    its_udp.it_value.tv_sec = 1; // 1 second first shot
-    its_udp.it_interval.tv_sec = 1;
+    its_udp.it_value.tv_sec = 5; // 5 seconds first shot
+    its_udp.it_interval.tv_sec = 5;
 
     //garbage collector 
     ctx->gc_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
