@@ -30,6 +30,20 @@ int add_to_epoll_interest_list(int epollfd, int targetfd, uint32_t events);
  */
 int remove_from_epoll_interest_list(int epoll_fd, int target_fd);
 
+/**
+ * @brief Re-arms a file descriptor in the epoll interest list after EPOLLONESHOT.
+ *
+ * Reference: man 2 epoll_ctl.
+ * When a file descriptor is registered with EPOLLONESHOT, epoll automatically
+ * disables it after the first event fires. This function re-enables monitoring
+ * by performing an EPOLL_CTL_MOD operation with EPOLLIN | EPOLLONESHOT,
+ * allowing the worker thread to safely signal completion before re-arming.
+ * Fails silently if the target_fd has already been closed.
+ *
+ * @param epoll_fd The file descriptor of the central epoll instance.
+ * @param target_fd The file descriptor to re-arm in the interest list.
+ * @return 0 on success, or -1 on error.
+ */
 int rearm_epoll_fd(int epoll_fd, int target_fd);
 
 #endif
