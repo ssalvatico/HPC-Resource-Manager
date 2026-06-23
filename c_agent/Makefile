@@ -39,4 +39,4 @@ clean:
 
 clear: clean
 
-.PHONY: all run clean clear
+.PHONY: all run clear

@@ -27,4 +27,4 @@ clean:
 
 clear: clean
 
-.PHONY: build run run_test clean clear
+.PHONY: build run run_test clear
