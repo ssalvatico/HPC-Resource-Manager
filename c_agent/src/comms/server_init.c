@@ -5,7 +5,7 @@
 #include <stdlib.h> 
 
 void init_server(ServerContext* ctx, int argc, char *argv[]) {
-    if(argc != 3) exit(EXIT_FAILURE);
+    if(argc != 6) exit(EXIT_FAILURE);
     
     ctx->port = atoi(argv[1]);
     ctx->lan_ip = argv[2];

@@ -1,42 +1,20 @@
 #include "../../include/resources/node-structures.h"
 #include "../../include/comms/server_types.h"
 #include "../../include/comms/event_handler.h"
+#include "../../include/comms/resource_adapter.h"
 #include <string.h>
 #include <stdio.h>
 
 #include <pthread.h>
 
-#define MAX_TRACKED_JOBS 100
-#define MAX_NODES_PER_JOB 20
-
-typedef struct {
-    char ip[16];
-    unsigned port;
-    resource_t type;
-    unsigned amount;
-} parsed_petition_t;
-
-// El Registro Completo del Trabajo (Agrupa las peticiones por job_id)
-typedef struct {
-    unsigned job_id;
-    int is_active;
-    unsigned petition_count;
-    parsed_petition_t petitions[MAX_NODES_PER_JOB];
-} job_record_t;
-
 // La memoria estatica del adaptador de red
 static job_record_t active_jobs_registry[MAX_TRACKED_JOBS] = {0};
 
+// ==========================================
+// LOCKS GLOBALES
+// ==========================================
 pthread_mutex_t juani_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-// ==========================================
-// PROTOTIPOS DE FUNCIONES AUXILIARES
-// ==========================================
-static int parse_reserve_release(const char* buffer, unsigned* job_id, resource_t* type, unsigned* quantity);
-static int parse_announce(const char* buffer, unsigned* port, unsigned* cpu, unsigned* ram, unsigned* gpu);
-static int parse_job_request(const char* buffer, unsigned* job_id, parsed_petition_t* petitions, unsigned* petition_count, unsigned max_petitions);
-static int parse_single_id_cmd(const char* buffer, unsigned* job_id);
-static void register_job(unsigned job_id, parsed_petition_t* petitions, unsigned count);
+static pthread_rwlock_t registry_rwlock = PTHREAD_RWLOCK_INITIALIZER; // Lock para la tabla de red
 
 // ==========================================
 // ADAPTADOR DE RECURSOS PRINCIPAL
@@ -67,6 +45,16 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
         // dead_count = command_check_dead_nodes(NODE, dead_ips, 50); 
         pthread_mutex_unlock(&juani_mutex);
 
+        // --- CACHÉ DE FASE 2 ---
+        unsigned affected_jobs_cache[MAX_TRACKED_JOBS];
+        int affected_count = 0;
+        unsigned loopback_jobs[MAX_TRACKED_JOBS * MAX_NODES_PER_JOB];
+        unsigned loopback_amounts[MAX_TRACKED_JOBS * MAX_NODES_PER_JOB];
+        resource_t loopback_types[MAX_TRACKED_JOBS * MAX_NODES_PER_JOB];
+        int loopback_count = 0;
+
+        // FASE 1: LOCK DE RED (Solo manipular outbox y memoria de red)
+        pthread_rwlock_wrlock(&registry_rwlock);
         for (unsigned d = 0; d < dead_count; d++) {
             const char* dead_ip = dead_ips[d];
 
@@ -85,16 +73,16 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
                     if (job_is_affected) {
                         unsigned affected_job_id = active_jobs_registry[i].job_id;
 
-                        // A. Mandar RELEASE a los nodos vivos
                         for (unsigned j = 0; j < active_jobs_registry[i].petition_count; j++) {
                             char* ip_destino = active_jobs_registry[i].petitions[j].ip;
                             
                             if (strcmp(ip_destino, dead_ip) != 0) {
-                                // === OPTIMIZACIÓN LOOPBACK ===
+                                // === OPTIMIZACIÓN LOOPBACK (Guardado en Caché) ===
                                 if (strcmp(ip_destino, ctx->lan_ip) == 0) {
-                                    pthread_mutex_lock(&juani_mutex);
-                                    // command_release(NODE, affected_job_id, active_jobs_registry[i].petitions[j].amount, active_jobs_registry[i].petitions[j].type);
-                                    pthread_mutex_unlock(&juani_mutex);
+                                    loopback_jobs[loopback_count] = affected_job_id;
+                                    loopback_amounts[loopback_count] = active_jobs_registry[i].petitions[j].amount;
+                                    loopback_types[loopback_count] = active_jobs_registry[i].petitions[j].type;
+                                    loopback_count++;
                                 } else {
                                     char res_str[4];
                                     if      (active_jobs_registry[i].petitions[j].type == CPU) strcpy(res_str, "cpu");
@@ -112,25 +100,45 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
 
                         // B. Avisar a Erlang
                         sprintf(outbox[*outbox_count].message, "JOB_DENIED %u\n", affected_job_id);
-                        outbox[*outbox_count].target_fd = ctx->erlang_tcp_fd; 
+                        outbox[*outbox_count].target_fd = ctx->active_erlang_fd; 
                         (*outbox_count)++;
 
-                        // C. Limpiar en Juani
-                        pthread_mutex_lock(&juani_mutex);
-                        // command_job_release(NODE, affected_job_id);
-                        pthread_mutex_unlock(&juani_mutex);
+                        // C. Guardar el trabajo afectado en caché
+                        affected_jobs_cache[affected_count++] = affected_job_id;
 
                         active_jobs_registry[i].is_active = 0;
                     }
                 }
             }
         }
+        pthread_rwlock_unlock(&registry_rwlock); // <-- LIBERACIÓN DEL CANDADO DE RED
+
+        // FASE 2: LOCK DE NEGOCIO (Aplicar los cambios cacheados sin estorbar la red)
+        pthread_mutex_lock(&juani_mutex);
+        for (int k = 0; k < loopback_count; k++) {
+            // command_release(NODE, loopback_jobs[k], loopback_amounts[k], loopback_types[k]);
+        }
+        for (int k = 0; k < affected_count; k++) {
+            // command_job_release(NODE, affected_jobs_cache[k]);
+        }
+        pthread_mutex_unlock(&juani_mutex);
+
         return;
     }
     
     if (action == ACTION_DISCONNECTED) {
         const char* dead_ip = SENDER_IP; 
 
+        // --- CACHÉ DE FASE 2 ---
+        unsigned affected_jobs_cache[MAX_TRACKED_JOBS];
+        int affected_count = 0;
+        unsigned loopback_jobs[MAX_TRACKED_JOBS * MAX_NODES_PER_JOB];
+        unsigned loopback_amounts[MAX_TRACKED_JOBS * MAX_NODES_PER_JOB];
+        resource_t loopback_types[MAX_TRACKED_JOBS * MAX_NODES_PER_JOB];
+        int loopback_count = 0;
+
+        // FASE 1: LOCK DE RED 
+        pthread_rwlock_wrlock(&registry_rwlock);
         for (int i = 0; i < MAX_TRACKED_JOBS; i++) {
             if (active_jobs_registry[i].is_active) {
                 
@@ -146,16 +154,16 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
                 if (job_is_affected) {
                     unsigned affected_job_id = active_jobs_registry[i].job_id;
 
-                    // A. Mandar RELEASE a los vivos
                     for (unsigned j = 0; j < active_jobs_registry[i].petition_count; j++) {
                         char* ip_destino = active_jobs_registry[i].petitions[j].ip;
                         
                         if (strcmp(ip_destino, dead_ip) != 0) {
-                            // === OPTIMIZACIÓN LOOPBACK ===
+                            // === OPTIMIZACIÓN LOOPBACK (Guardado en Caché) ===
                             if (strcmp(ip_destino, ctx->lan_ip) == 0) {
-                                pthread_mutex_lock(&juani_mutex);
-                                // command_release(NODE, affected_job_id, active_jobs_registry[i].petitions[j].amount, active_jobs_registry[i].petitions[j].type);
-                                pthread_mutex_unlock(&juani_mutex);
+                                loopback_jobs[loopback_count] = affected_job_id;
+                                loopback_amounts[loopback_count] = active_jobs_registry[i].petitions[j].amount;
+                                loopback_types[loopback_count] = active_jobs_registry[i].petitions[j].type;
+                                loopback_count++;
                             } else {
                                 char res_str[4];
                                 if      (active_jobs_registry[i].petitions[j].type == CPU) strcpy(res_str, "cpu");
@@ -173,21 +181,26 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
 
                     // B. Avisar a Erlang
                     sprintf(outbox[*outbox_count].message, "JOB_DENIED %u\n", affected_job_id);
-                    outbox[*outbox_count].target_fd = ctx->erlang_tcp_fd; 
+                    outbox[*outbox_count].target_fd = ctx->active_erlang_fd; 
                     (*outbox_count)++;
 
-                    // C. Limpiar en Juani
-                    pthread_mutex_lock(&juani_mutex);
-                    // command_job_release(NODE, affected_job_id);
-                    pthread_mutex_unlock(&juani_mutex);
+                    // C. Guardar el trabajo afectado en caché
+                    affected_jobs_cache[affected_count++] = affected_job_id;
 
                     active_jobs_registry[i].is_active = 0;
                 }
             }
         }
+        pthread_rwlock_unlock(&registry_rwlock); // <-- LIBERACIÓN DEL CANDADO DE RED
 
+        // FASE 2: LOCK DE NEGOCIO 
         pthread_mutex_lock(&juani_mutex);
-        release_jobs_by_socket(NODE, SOCKET);
+        for (int k = 0; k < loopback_count; k++) {
+            // command_release(NODE, loopback_jobs[k], loopback_amounts[k], loopback_types[k]);
+        }
+        for (int k = 0; k < affected_count; k++) {
+            // command_job_release(NODE, affected_jobs_cache[k]);
+        }
         pthread_mutex_unlock(&juani_mutex);
 
         return;
@@ -195,7 +208,6 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
     
     if (action == ACTION_NEW_NODE_DISCOVERED) {
         unsigned discovered_port, cpu, gpu, ram;
-        // CORRECCIÓN: Uso del ampersand (&) para el paso por referencia de memoria
         if(parse_announce(BUFFER, &discovered_port, &cpu, &ram, &gpu)){
             //command_announce(NODE, SENDER_IP, discovered_port, cpu, ram, gpu);
         }
@@ -280,6 +292,7 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
                 // command_job_request(NODE, job_id, ips_ptrs, ports, types, amounts, petition_count);
                 pthread_mutex_unlock(&juani_mutex);
 
+                // Esta función tiene su propio rwlock adentro
                 register_job(job_id, petitions, petition_count);
 
                 for (unsigned i = 0; i < petition_count; i++) {
@@ -304,7 +317,7 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
             
             if (parse_single_id_cmd(BUFFER, &job_id)) {
                 pthread_mutex_lock(&juani_mutex);
-                // unsigned job_fully_granted = command_granted(NODE, job_id, SENDER_IP); 
+                // unsigned job_fully_granted = command_granted(NODE, job_id, SENDER_IP, puerto); 
                 pthread_mutex_unlock(&juani_mutex);
                 
                 int job_fully_granted = 0; // Dummy
@@ -324,6 +337,13 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
             
             if (parse_single_id_cmd(BUFFER, &job_id)) {
                 
+                // --- CACHE DE FASE 2 ---
+                unsigned loopback_amounts[MAX_NODES_PER_JOB];
+                resource_t loopback_types[MAX_NODES_PER_JOB];
+                int loopback_count = 0;
+
+                // FASE 1: LOCK DE ESCRITURA 
+                pthread_rwlock_wrlock(&registry_rwlock);
                 for (int i = 0; i < MAX_TRACKED_JOBS; i++) {
                     if (active_jobs_registry[i].is_active && active_jobs_registry[i].job_id == job_id) {
                         
@@ -331,11 +351,11 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
                             char* ip_destino = active_jobs_registry[i].petitions[j].ip;
                             
                             if (strcmp(ip_destino, SENDER_IP) != 0) {
-                                // === OPTIMIZACIÓN LOOPBACK ===
+                                // === OPTIMIZACIÓN LOOPBACK (Guardado en Caché) ===
                                 if (strcmp(ip_destino, ctx->lan_ip) == 0) {
-                                    pthread_mutex_lock(&juani_mutex);
-                                    // command_release(NODE, job_id, active_jobs_registry[i].petitions[j].amount, active_jobs_registry[i].petitions[j].type);
-                                    pthread_mutex_unlock(&juani_mutex);
+                                    loopback_amounts[loopback_count] = active_jobs_registry[i].petitions[j].amount;
+                                    loopback_types[loopback_count] = active_jobs_registry[i].petitions[j].type;
+                                    loopback_count++;
                                 } else {
                                     char res_str[4];
                                     if      (active_jobs_registry[i].petitions[j].type == CPU) strcpy(res_str, "cpu");
@@ -354,14 +374,20 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
                         break; 
                     }
                 }
+                pthread_rwlock_unlock(&registry_rwlock); // <-- LIBERACIÓN DEL CANDADO DE RED
 
                 if (strncmp(BUFFER, "DENIED", 6) == 0) {
                     sprintf(outbox[*outbox_count].message, "JOB_DENIED %u\n", job_id);
-                    outbox[*outbox_count].target_fd = ctx->erlang_tcp_fd; 
+                    outbox[*outbox_count].target_fd = ctx->active_erlang_fd; 
                     (*outbox_count)++;
                 }
 
+                // FASE 2: LOCK DE NEGOCIO 
                 pthread_mutex_lock(&juani_mutex);
+                for (int k = 0; k < loopback_count; k++) {
+                    // command_release(NODE, job_id, loopback_amounts[k], loopback_types[k]);
+                }
+
                 if (strncmp(BUFFER, "JOB_RELEASE", 11) == 0) {
                     // command_job_release(NODE, job_id);
                 } else {
@@ -377,7 +403,7 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
 // =====================================================
 // PARSING 
 
-static int parse_reserve_release(const char* buffer, unsigned* job_id, resource_t* type, unsigned* quantity) {
+int parse_reserve_release(const char* buffer, unsigned* job_id, resource_t* type, unsigned* quantity) {
     char cmd[32];
     char res_str[32];
     
@@ -391,14 +417,14 @@ static int parse_reserve_release(const char* buffer, unsigned* job_id, resource_
     return 0;
 }
 
-static int parse_announce(const char* buffer, unsigned* port, unsigned* cpu, unsigned* ram, unsigned* gpu) {
+int parse_announce(const char* buffer, unsigned* port, unsigned* cpu, unsigned* ram, unsigned* gpu) {
     if (sscanf(buffer, "ANNOUNCE %u cpu:%u mem:%u gpu:%u", port, cpu, ram, gpu) == 4) {
         return 1;
     }
     return 0;
 }
 
-static int parse_job_request(const char* buffer, unsigned* job_id, parsed_petition_t* petitions, unsigned* petition_count, unsigned max_petitions) {
+int parse_job_request(const char* buffer, unsigned* job_id, parsed_petition_t* petitions, unsigned* petition_count, unsigned max_petitions) {
     char cmd[32];
     
     if (sscanf(buffer, "%31s %u", cmd, job_id) != 2) return 0;
@@ -430,7 +456,7 @@ static int parse_job_request(const char* buffer, unsigned* job_id, parsed_petiti
     return (*petition_count > 0) ? 1 : 0;
 }
 
-static int parse_single_id_cmd(const char* buffer, unsigned* job_id) {
+int parse_single_id_cmd(const char* buffer, unsigned* job_id) {
     char cmd[32];
     if (sscanf(buffer, "%31s %u", cmd, job_id) == 2) {
         return 1;
@@ -441,7 +467,9 @@ static int parse_single_id_cmd(const char* buffer, unsigned* job_id) {
 // ==========================================================
 // AUX FUNCTIONS
 
-static void register_job(unsigned job_id, parsed_petition_t* petitions, unsigned count) {
+void register_job(unsigned job_id, parsed_petition_t* petitions, unsigned count) {
+    // LOCK DE ESCRITURA: Encontramos un espacio libre y escribimos en él
+    pthread_rwlock_wrlock(&registry_rwlock);
     for (int i = 0; i < MAX_TRACKED_JOBS; i++) {
         if (!active_jobs_registry[i].is_active) {
             active_jobs_registry[i].job_id = job_id;
@@ -455,4 +483,5 @@ static void register_job(unsigned job_id, parsed_petition_t* petitions, unsigned
             break;
         }
     }
+    pthread_rwlock_unlock(&registry_rwlock);
 }

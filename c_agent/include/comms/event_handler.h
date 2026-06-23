@@ -116,15 +116,6 @@ void handle_gc_timer_expiration(ServerContext* ctx);
  */
 void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count);
 
-/**
- * @brief Retrieves the IP address of the remote peer connected to a socket.
- * * Reference: man 2 getpeername, man 3 inet_ntoa.
- * Extracts the remote IPv4 address associated with an active socket and 
- * copies it as a null-terminated string into the provided buffer.
- * * @param fd The active file descriptor.
- * * @param ip_buffer A pre-allocated string buffer to hold the IPv4 address (min 16 chars).
- * @return Void.
- */
-void get_ip_from_fd(int fd, char* ip_buffer);
+int find_fd_by_ip_and_port(const char* target_ip, int target_port);
 
 #endif
