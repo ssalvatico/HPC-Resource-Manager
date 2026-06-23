@@ -1,4 +1,5 @@
-#include "tablahash.h"
+#include "../../include/resources/tablahash.h"
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
