@@ -143,9 +143,10 @@ handle_packet(_) ->
 %%% Params: Packet (binary)
 get_node_list(Packet) ->
   String = binary:bin_to_list(Packet),
-  case String of
+  TrimmedString = string:trim(String),
+  case TrimmedString of
     "" -> [];
-    _ -> string:split(String, ";", all)
+    _ -> string:split(TrimmedString, ";", all)
   end.
 
 
@@ -164,7 +165,7 @@ get_node(Node) ->
 %%% Converts a flat list of alternating keys and values into tuples.
 %%% Example: ["cpu", "4", "gpu", "1"] -> [{"cpu", 4}, {"gpu", 1}]
 to_pairs([Key, Value | Rest]) ->
-    [{Key, list_to_integer(Value)} | to_pairs(Rest)];
+    [{Key, list_to_integer(string:trim(Value))} | to_pairs(Rest)];
 to_pairs([]) ->
     [].
 
