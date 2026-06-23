@@ -16,7 +16,7 @@ typedef enum {
     ACTION_NONE               // No hacer nada
 } JuaniAction;
 
-#define MAX_OUTBOX 50
+#define MAX_OUTBOX 128
 
 /**
  * @brief Handles the expiration of the TCP startup timer.
@@ -119,17 +119,8 @@ void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count);
 
 void resource_adapter_patch(node_data_t NODE, char * SENDER_IP, unsigned SOCKET, const char * BUFFER, out_msg_t * outbox, int * outbox_count, JuaniAction action);
 
-/**
- * @brief Retrieves the IP address of the remote peer connected to a socket.
- * * Reference: man 2 getpeername, man 3 inet_ntoa.
- * Extracts the remote IPv4 address associated with an active socket and 
- * copies it as a null-terminated string into the provided buffer.
- * * @param fd The active file descriptor.
- * * @param ip_buffer A pre-allocated string buffer to hold the IPv4 address (min 16 chars).
- * @return Void.
- */
-void get_ip_from_fd(int fd, char* ip_buffer);
+int find_fd_by_ip_port(const char* target_ip, unsigned target_port);
 
-int find_fd_by_ip(const char* target_ip);
+unsigned get_connection_port(int fd);
 
 #endif

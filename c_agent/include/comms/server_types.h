@@ -24,6 +24,7 @@ typedef struct {
 typedef struct {
     int is_active;                      
     char ip[16];                        
+    unsigned port;
     char pending_message[BUFFER_SIZE];
     unsigned job_id;
 } ConnectionState;

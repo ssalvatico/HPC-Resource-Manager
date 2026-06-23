@@ -2,7 +2,6 @@
 #include "../../include/comms/sys_sockets.h"
 #include "../../include/comms/sys_epoll.h"
 #include "../../include/comms/server_types.h"
-//#include "../../include/resources/mock_resource_manager.h"
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -74,7 +73,12 @@ void handle_udp_timer_expiration(ServerContext* ctx) {
     // in order to craft the message 
     resource_adapter_patch(ctx->mynode, NULL, ctx->port, NULL, outbox, &outbox_count, ACTION_GET_RESOURCES);
     
-    broadcast_announce(ctx->udp_fd, UDP_PORT, outbox[0].message);
+    ssize_t sent = broadcast_announce(ctx->lan_ip, UDP_PORT, outbox[0].message);
+    if (sent >= 0) {
+        printf("[UDP] Sent from %s: %s", ctx->lan_ip, outbox[0].message);
+    } else {
+        printf("[UDP] Failed to send ANNOUNCE from %s\n", ctx->lan_ip);
+    }
 }
 
 void handle_incoming_discovery(ServerContext* ctx) {
@@ -82,7 +86,7 @@ void handle_incoming_discovery(ServerContext* ctx) {
     char sender_ip[16];
     
     if (process_discovery_datagram(ctx->udp_fd, buffer, BUFFER_SIZE, sender_ip) == 0) {
-        if (strcmp(sender_ip, ctx->lan_ip) == 0) return; 
+        printf("[UDP] Received from %s: %s", sender_ip, buffer);
         // con esto le digo a juani que hay un nuevo nodo descubierto y en buffer le paso 
         // el announce del emisor y la ip en sender ip
         out_msg_t dummy_outbox[1]; 
@@ -106,6 +110,7 @@ void handle_new_tcp_connection(ServerContext* ctx, int server_fd) {
         pthread_rwlock_wrlock(&connections_lock);
         active_connections[client_fd].is_active = 1;
         strncpy(active_connections[client_fd].ip, client_ip, 16);
+        active_connections[client_fd].port = 0;
         active_connections[client_fd].pending_message[0] = '\0';
         pthread_rwlock_unlock(&connections_lock);
         
@@ -152,6 +157,7 @@ int handle_client_message(ServerContext* ctx, int curr_fd) {
         pthread_rwlock_wrlock(&connections_lock);
         active_connections[curr_fd].is_active = 0;
         active_connections[curr_fd].ip[0] = '\0';
+        active_connections[curr_fd].port = 0;
         active_connections[curr_fd].pending_message[0] = '\0';
         pthread_rwlock_unlock(&connections_lock);
     }
@@ -180,6 +186,7 @@ void handle_connection_success(ServerContext* ctx, int curr_fd) {
         pthread_rwlock_wrlock(&connections_lock);
         active_connections[curr_fd].is_active = 0;
         active_connections[curr_fd].ip[0] = '\0';
+        active_connections[curr_fd].port = 0;
         active_connections[curr_fd].pending_message[0] = '\0';
         pthread_rwlock_unlock(&connections_lock);
 
@@ -192,7 +199,11 @@ void handle_connection_success(ServerContext* ctx, int curr_fd) {
     
     // bien paso borramos el mensaje pendiente pero dejamos la badera en 1
     pthread_rwlock_wrlock(&connections_lock);
-    send_tcp_message(curr_fd, active_connections[curr_fd].pending_message);
+    int sent = send_tcp_message(curr_fd, active_connections[curr_fd].pending_message);
+    printf("[OUTBOX] Sent pending to FD %d (%s): %s", curr_fd, target_ip, active_connections[curr_fd].pending_message);
+    if (sent < 0) {
+        printf("[OUTBOX] Failed sending pending to FD %d\n", curr_fd);
+    }
     active_connections[curr_fd].pending_message[0] = '\0';
     pthread_rwlock_unlock(&connections_lock);
 
@@ -233,12 +244,16 @@ void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count) {
         // esto es para que en conexiones donde se repite la ip pero con distinto fd como 
         // el cliete erlang, no tenga errores, lo deberia de mandar mi funcin master
         if (target == -1) {
-            target = find_fd_by_ip(outbox[i].target_ip);
+            target = find_fd_by_ip_port(outbox[i].target_ip, outbox[i].target_port);
         }
 
         // CASO A: Existe conexion 
         if (target != -1) {
-            send_tcp_message(target, outbox[i].message);
+            int sent = send_tcp_message(target, outbox[i].message);
+            printf("[OUTBOX] Sent to FD %d (%s:%d): %s", target, outbox[i].target_ip, outbox[i].target_port, outbox[i].message);
+            if (sent < 0) {
+                printf("[OUTBOX] Failed sending to FD %d\n", target);
+            }
         } 
         // CASO B: Abrimos conexion asincrona
         else {
@@ -246,12 +261,14 @@ void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count) {
             // arreglar
             int new_fd = connect_to_tcp_node(outbox[i].target_ip, outbox[i].target_port);
             if (new_fd != -1) {
+                printf("[OUTBOX] Connecting to %s:%d for: %s", outbox[i].target_ip, outbox[i].target_port, outbox[i].message);
                 if (new_fd < MAX_FDS) {
                     
                     // Guardamos el estado unificado
                     pthread_rwlock_wrlock(&connections_lock);
                     active_connections[new_fd].is_active = 1;
                     strncpy(active_connections[new_fd].ip, outbox[i].target_ip, 16);
+                    active_connections[new_fd].port = outbox[i].target_port;
                     strncpy(active_connections[new_fd].pending_message, outbox[i].message, BUFFER_SIZE - 1);
                     active_connections[new_fd].pending_message[BUFFER_SIZE - 1] = '\0';
                     pthread_rwlock_unlock(&connections_lock);
@@ -266,26 +283,29 @@ void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count) {
     }
 }
 
-void get_ip_from_fd(int fd, char* ip_buffer) {
-    struct sockaddr_in addr;
-    socklen_t addr_len = sizeof(addr);
-    if (getpeername(fd, (struct sockaddr*)&addr, &addr_len) == 0) {
-        strcpy(ip_buffer, inet_ntoa(addr.sin_addr));
-    } else {
-        strcpy(ip_buffer, "UNKNOWN");
-    }
-}
-
-int find_fd_by_ip(const char* target_ip) {
+int find_fd_by_ip_port(const char* target_ip, unsigned target_port) {
     int found_fd = -1;
     pthread_rwlock_rdlock(&connections_lock);
     for (int i = 0; i < MAX_FDS; i++) {
-        // Comparamos solo si esta activa
-        if (active_connections[i].is_active && strncmp(active_connections[i].ip, target_ip, 15) == 0) {
+        if (active_connections[i].is_active &&
+            active_connections[i].port == target_port &&
+            strncmp(active_connections[i].ip, target_ip, 15) == 0) {
             found_fd = i;
             break;
         }
     }
     pthread_rwlock_unlock(&connections_lock);
     return found_fd;
+}
+
+unsigned get_connection_port(int fd) {
+    unsigned port = 0;
+    if (fd < 0 || fd >= MAX_FDS) return 0;
+
+    pthread_rwlock_rdlock(&connections_lock);
+    if (active_connections[fd].is_active) {
+        port = active_connections[fd].port;
+    }
+    pthread_rwlock_unlock(&connections_lock);
+    return port;
 }
