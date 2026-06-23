@@ -832,7 +832,6 @@ void release_jobs_by_socket(node_data_t NODE, unsigned socket) {
                     (FuncionDestructora)dest_job_request,
                     (FuncionComparadora)comp_job_request
                 );
-                // Reiniciamos desde el principio porque la cola cambió
                 act = resources->request_queue[type];
             } else {
                 act = act->next;
