@@ -16,18 +16,6 @@
 
 typedef enum { FALSE = 0, TRUE = 1, STATES = 2 }        state_t;
 
-typedef enum {
-    CMD_RESERVE     = 0, // done
-    CMD_RELEASE     = 1, // done
-    CMD_ANNOUNCE    = 2, // done
-    CMD_GET_NODES   = 3, // done
-    CMD_JOB_REQUEST = 4, // done
-    CMD_JOB_RELEASE = 5, // done
-    CMD_GRANTED     = 6, // done
-    CMD_DENIED      = 7, // done
-    CMD_INVALID     = 8  // default case
-} command_t;
-
 //********************************************* */
 // ELEMENTS FOR DATA STRUCTURES
 
@@ -363,32 +351,102 @@ static void del_active_job (local_resources_t * resources, active_jobs_t jobs, c
 /********************************************** */
 // KNOWN NODES MANAGING
 
-static unsigned cont = 0;
-static elem_known_nodes_t ** nodes_to_eliminate;
+// Request-Queues and Active-Jobs cleaner
 
-static void     known_nodes_del_inactive        (elem_known_nodes_t * node){
-    if (difftime(time(NULL), node->time_stamp) > TIMEOUT) nodes_to_eliminate[cont++] = node;
+static elem_active_job_t ** active_jobs_to_eliminate;
+static unsigned              active_jobs_cont;
+static char *                cleanup_ip;
+
+static void collect_active_jobs_by_ip(elem_active_job_t * job){
+    if(strcmp(job->node_ip, cleanup_ip) == 0)
+        active_jobs_to_eliminate[active_jobs_cont++] = job;
 }
 
-void            known_nodes_del_inactive_nodes  (node_data_t node){
+void cleanup_node(node_data_t NODE, char * node_ip){
+    local_resources_t * resources   = NODE->resources;
+    active_jobs_t       active_jobs = NODE->active_jobs;
+    cleanup_ip = node_ip;
+
+    // 1 - request_queue
+    for(unsigned type = 0 ; type < RES_NUM ; type++){
+        queue_t act = resources->request_queue[type];
+        while(!queue_empty(act)){
+            elem_job_request_t * elem = act->data;
+            if(strcmp(elem->node_ip, node_ip) == 0){
+                resources->request_queue[type] = queue_delete(
+                    resources->request_queue[type], elem,
+                    (FuncionDestructora)dest_job_request,
+                    (FuncionComparadora)comp_job_request
+                );
+                act = resources->request_queue[type];
+            } else {
+                act = act->next;
+            }
+        }
+    }
+
+    // 2 - active_jobs
+    unsigned size = tablahash_nelems(active_jobs);
+    if(size > 0){
+        active_jobs_to_eliminate = malloc(sizeof(elem_active_job_t *) * size);
+        if(active_jobs_to_eliminate != NULL){
+            active_jobs_cont = 0;
+            tablahash_visitar(active_jobs, (FuncionVisitante)collect_active_jobs_by_ip);
+            for(unsigned idx = 0 ; idx < active_jobs_cont ; idx++){
+                resources->avail[active_jobs_to_eliminate[idx]->resource_type] += active_jobs_to_eliminate[idx]->resource_quantity;
+                tablahash_eliminar(active_jobs, active_jobs_to_eliminate[idx]);
+            }
+            free(active_jobs_to_eliminate);
+        }
+    }
+}
+
+// IPs and Ports Recovery
+static char **                  ARR_ID_AUX;
+static unsigned *               ARR_PT_AUX;
+static unsigned                 ARR_SZ_AUX;
+static unsigned                 ARR_CONT = 0;
+static elem_known_nodes_t **    nodes_to_eliminate;
+
+static void known_nodes_del_inactive(elem_known_nodes_t * node){
+    if (ARR_CONT >= ARR_SZ_AUX) return;
+
+    if (difftime(time(NULL), node->time_stamp) > TIMEOUT){
+        nodes_to_eliminate[ARR_CONT] = node;
+
+        ARR_ID_AUX[ARR_CONT] = strduplicate(node -> node_ip);
+        ARR_PT_AUX[ARR_CONT] = node -> node_port;
+
+        ARR_CONT++;
+    }
+}
+
+unsigned known_nodes_del_inactive_nodes (node_data_t node, char ** ARR_ID, unsigned * ARR_PORT, unsigned ARR_SIZE){
     known_nodes_t nodes = node -> known_nodes;
     
-    cont = 0;
+    ARR_CONT = 0;
     unsigned size = tablahash_nelems(nodes);
 
     if(size == 0)
-        return;
+        return 0;
 
     nodes_to_eliminate = malloc(sizeof(elem_known_nodes_t *) * size);
     
     if(nodes_to_eliminate == NULL)
-        return;
+        return 0;
+
+    ARR_ID_AUX = ARR_ID; 
+    ARR_PT_AUX = ARR_PORT;
+    ARR_SZ_AUX = ARR_SIZE;     
 
     tablahash_visitar(nodes, (FuncionVisitante)known_nodes_del_inactive);
 
-    for(unsigned idx = 0 ; idx < cont ; idx++) { tablahash_eliminar(nodes, nodes_to_eliminate[idx]); }
+    for(unsigned idx = 0 ; idx < ARR_CONT ; idx++) { tablahash_eliminar(nodes, nodes_to_eliminate[idx]); }
 
+    
     free(nodes_to_eliminate);
+
+    return ARR_CONT;
 }
 
 static char *   append_out_buffer;
@@ -436,7 +494,6 @@ static int check_job_granted(own_jobs_t jobs, unsigned job_id){
 
     return granted_job_cond;
 }
-
 
 /********************************************** */
 // CONTROL FUNCTIONS
@@ -545,7 +602,7 @@ void command_job_request(node_data_t NODE, unsigned job_id, char ** ARR_IP, unsi
     tablahash_insertar(NODE -> owned_jobs, new_job);
 }
 
-void command_job_release(node_data_t NODE, unsigned job_id){
+void command_job_release_and_denied(node_data_t NODE, unsigned job_id){
     elem_owned_job_t * dummy = create_owned_job(job_id);
     
     elem_owned_job_t * data  = tablahash_buscar(NODE -> owned_jobs, dummy);
@@ -569,16 +626,16 @@ void command_denied     (node_data_t NODE, unsigned job_id){
     dest_owned_job(dummy);    
 }
 
-void command_granted    (node_data_t NODE, unsigned job_id, char *  NODE_IP, unsigned NODE_PORT){ // preguntar lucio
+unsigned command_granted    (node_data_t NODE, unsigned job_id, char *  NODE_IP, unsigned NODE_PORT){ // preguntar lucio
     elem_owned_job_t * dummy1 = create_owned_job(job_id);
-    if(!dummy1) return; 
+    if(!dummy1) return 0; 
     
     elem_owned_job_t * job = tablahash_buscar(NODE -> owned_jobs, dummy1);
     dest_owned_job(dummy1);
-    if(!job)    return;
+    if(!job)    return 0;
 
     elem_petition_t * dummy2 = create_elem_petition(NODE_IP, NODE_PORT, 0);
-    if(!dummy2) return;
+    if(!dummy2) return 0;
 
     unsigned cond = 0;
     elem_petition_t * act;
@@ -594,10 +651,9 @@ void command_granted    (node_data_t NODE, unsigned job_id, char *  NODE_IP, uns
 
     dest_rec_petition(dummy2);
     
-    if(!cond) return;
+    if(!cond) return 0;
     
-    if(check_job_granted(NODE -> owned_jobs, job_id))  
-        snprintf(OUT, OUT_SIZE, "JOB_GRANTED %u", job_id);    
+    return (check_job_granted(NODE -> owned_jobs, job_id)) ? 1 : 0;
 }
 
 unsigned command_reserve    (node_data_t NODE, char * NODE_IP, unsigned SOCKET, unsigned job_id, resource_t type, unsigned amount){ // preguntar lucio
