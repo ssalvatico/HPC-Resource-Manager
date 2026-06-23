@@ -7,9 +7,7 @@ run: c-run
 
 runclient: erlang-run
 
-clean: c-clean erlang-clean
-
-clear: clean
+clear: c-clear erlang-clear
 
 c-build:
 	$(MAKE) -C $(C_DIR)
@@ -17,8 +15,8 @@ c-build:
 c-run:
 	$(MAKE) -C $(C_DIR) run
 
-c-clean:
-	$(MAKE) -C $(C_DIR) clean
+c-clear:
+	$(MAKE) -C $(C_DIR) clear
 
 erlang-build:
 	$(MAKE) -C $(ERLANG_DIR) build
@@ -26,10 +24,9 @@ erlang-build:
 erlang-run:
 	$(MAKE) -C $(ERLANG_DIR) run
 
-erlang-clean:
-	$(MAKE) -C $(ERLANG_DIR) clean
+erlang-clear:
+	$(MAKE) -C $(ERLANG_DIR) clear
 
 .PHONY: \
-	all run clean clear \
-	c-build c-run c-clean \
-	erlang-build erlang-run erlang-clean
+	c-build c-run c-clear \
+	erlang-build erlang-run erlang-clear

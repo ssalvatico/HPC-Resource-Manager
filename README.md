@@ -1,76 +1,133 @@
-### HPC-Resource-Manager — How To Run
+# HPC Resource Manager — How to Run
 
 ---
-## Quick start (recommended)
 
-From the project root, compile both components with:
+## Quick Start
 
-`make`
+From the project root, compile both components:
 
-Then start the C agent and Erlang scheduler separately (see below).
+```bash
+make
+```
 
+This builds:
 
----
-## Step 1 — Compile
-
-To compile both components at once:
-
-`make`
-
-To compile each component individually:
-
-`make c-build` — compiles the C agent into `c_agent/c_build`
-
-`make erlang-build` — compiles Erlang modules into `erlang/ebin/`
-
+* The C agent executable (`c_agent/c_agent`)
+* The C object files (`c_agent/c_build/`)
+* The Erlang bytecode modules (`erlang/ebin/`)
 
 ---
-## Step 2 — Start the C agent
 
-The C agent must be running before the Erlang scheduler starts.
-From the `c_agent/` directory:
+## Building Components Individually
 
-`make run`
+Compile only the C agent:
 
-This starts the agent on port `8000` listening on `127.0.0.1`.
-To use a different port or IP, run directly:
+```bash
+make c-build
+```
 
-`./c_agent <port> <ip>`
+Compile only the Erlang modules:
 
-
----
-## Step 3 — Start the Erlang scheduler
-
-Once the C agent is running, from the `erlang/` directory:
-
-`make run`
-
-The scheduler will connect to the C agent, request the list of available
-nodes, and begin generating and sending job requests.
-
-To run in test mode:
-
-`make run_test`
-
+```bash
+make erlang-build
+```
 
 ---
+
+## Running the C Agent
+
+The C agent must be started before the Erlang scheduler.
+
+From the project root:
+
+```bash
+make run
+```
+
+This executes:
+
+```text
+c_agent/c_agent 127.0.0.1 8000 4 8192 1
+```
+
+Alternatively, from the `c_agent/` directory:
+
+```bash
+./c_agent <ip> <port> <threads> <memory> <gpu>
+```
+
+---
+
+## Running the Erlang Scheduler
+
+Once the C agent is running:
+
+```bash
+make runclient
+```
+
+The scheduler connects to the C agent, retrieves the available nodes, and begins generating and scheduling jobs.
+
+To execute the scheduler in test mode:
+
+```bash
+cd erlang
+make run_test
+```
+
+---
+
+## Project Structure
+
+```text
+c_agent/
+    c_agent          Executable
+    c_build/         Object files (.o)
+    include/         Header files
+    src/             C source code
+
+erlang/
+    ebin/            Compiled Erlang modules (.beam)
+    *.erl            Erlang source files
+
+docs/
+    TP_Final.pdf
+```
+
+---
+
 ## Troubleshooting
 
-If the connection fails, the scheduler will retry up to `?TRIES` times.
-If all attempts fail, it will log the error to `erlang/event_logger.txt` and exit.
+* The C agent must be running before starting the Erlang scheduler.
+* If the connection fails, the scheduler retries several times before aborting.
+* Errors and events are written to:
 
-Make sure the C agent is running **before** starting the Erlang scheduler.
+```text
+event_logger.txt
+```
 
+* Erlang crash dumps are generated automatically if the VM terminates unexpectedly.
 
 ---
-## Clean up
 
-To remove all compiled files and logs:
+## Cleaning the Project
 
-`make clear`
+Remove all generated files:
 
-To clean each component individually:
+```bash
+make clear
+```
 
-`make c-clear` — removes `c_agent/c_build/` and the `c_agent` binary
+This removes:
 
-`make erlang-clear` — removes `erlang/ebin/`, `event_logger.txt`, and any crash dumps
+* `c_agent/c_build/`
+* `c_agent/c_agent`
+* `erlang/ebin/`
+* Erlang crash dumps
+
+To clean individual components:
+
+```bash
+make c-clear
+make erlang-clear
+```

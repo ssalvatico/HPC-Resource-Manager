@@ -1,30 +1,42 @@
+TARGET = c_agent
+
 CC = gcc
+CFLAGS = -Wall -Wextra -pthread -g
 
-CFLAGS = -Wall -Wextra -g -Iinclude -Iinclude/comms -Iinclude/resources -pthread
+INCLUDES = -Iinclude
 
-SRCS = $(wildcard src/comms/*.c) \
-       $(wildcard src/resources/*.c) \
-			 main.c
+BUILD_DIR = c_build
 
-OBJDIR = c_build
+SRCS = main.c \
+       src/comms/event_handler.c \
+       src/comms/resource_adapter.c \
+       src/comms/server_init.c \
+       src/comms/sys_epoll.c \
+       src/comms/sys_socket.c \
+       src/comms/thread_pool.c \
+       src/resources/node-structures.c \
+       src/resources/queues.c \
+       src/resources/tablahash.c
 
-OBJS = $(addprefix $(OBJDIR)/,$(SRCS:.c=.o))
+OBJS = $(SRCS:.c=.o)
+OBJS := $(addprefix $(BUILD_DIR)/,$(OBJS))
 
-build: c_agent
+all: $(TARGET)
 
-c_agent: $(OBJS)
+$(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
-	@echo "¡Compilación exitosa! Ejecuta con: ./c_agent <ip> <puerto> <cpu> <gpu> <ram>"
 
-# Regla genérica para compilar cada .c en un .o en su respectiva carpeta
-$(OBJDIR)/%.o: %.c
+$(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-run: c_agent
-	./c_agent 127.0.0.1 8000 4 1 4096
+run: $(TARGET)
+	./$(TARGET) 127.0.0.1 8000 4 8192 1
 
-clear:
-	rm -rf $(OBJDIR) c_agent
+clean:
+	rm -rf $(BUILD_DIR)
+	rm -f $(TARGET)
 
-.PHONY: all run clear
+clear: clean
+
+.PHONY: all run clean clear
