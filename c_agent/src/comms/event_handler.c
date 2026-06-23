@@ -2,7 +2,8 @@
 #include "../../include/comms/sys_sockets.h"
 #include "../../include/comms/sys_epoll.h"
 #include "../../include/comms/server_types.h"
-#include "../../include/comms/resource_adapter.h"
+#include "../../include/comms/resource_adapter.h"  
+#include "../../include/resources/node-structures.h" 
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>

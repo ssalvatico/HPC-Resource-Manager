@@ -3,9 +3,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
-#include "queues.h"
-#include "node-structures.h"
-#include "tablahash.h"
+#include "../../include/resources/queues.h"
+#include "../../include/resources/node-structures.h"
+#include "../../include/resources/tablahash.h"
 
 #define ERROR   0
 #define WAIT    1

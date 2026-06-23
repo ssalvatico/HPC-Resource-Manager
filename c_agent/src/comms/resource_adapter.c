@@ -38,11 +38,12 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
     }
     
     if (action == ACTION_CHECK_DEADNODES) {
-        char dead_ips[50][16]; 
+        char* dead_ips[16]; 
+        unsigned ports[50];
         unsigned dead_count = 0;
 
         pthread_mutex_lock(&juani_mutex);
-        // dead_count = command_check_dead_nodes(NODE, dead_ips, 50); 
+        dead_count = known_nodes_del_inactive_nodes(NODE, dead_ips, ports ,50); 
         pthread_mutex_unlock(&juani_mutex);
 
         // --- CACHÉ DE FASE 2 ---
@@ -116,10 +117,10 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
         // FASE 2: LOCK DE NEGOCIO (Aplicar los cambios cacheados sin estorbar la red)
         pthread_mutex_lock(&juani_mutex);
         for (int k = 0; k < loopback_count; k++) {
-            // command_release(NODE, loopback_jobs[k], loopback_amounts[k], loopback_types[k]);
+            command_release(NODE, (char*)ctx->lan_ip ,loopback_jobs[k], loopback_types[k], loopback_amounts[k]);
         }
         for (int k = 0; k < affected_count; k++) {
-            // command_job_release(NODE, affected_jobs_cache[k]);
+            command_job_release_and_denied(NODE, affected_jobs_cache[k]);
         }
         pthread_mutex_unlock(&juani_mutex);
 
@@ -193,17 +194,17 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
         }
         pthread_rwlock_unlock(&registry_rwlock); // <-- LIBERACIÓN DEL CANDADO DE RED
 
-        // FASE 2: LOCK DE NEGOCIO 
+        pthread_rwlock_unlock(&registry_rwlock); // <-- LIBERACIÓN DEL CANDADO DE RED
+
+        // FASE 2: LOCK DE NEGOCIO (Aplicar los cambios cacheados sin estorbar la red)
         pthread_mutex_lock(&juani_mutex);
         for (int k = 0; k < loopback_count; k++) {
-            // command_release(NODE, loopback_jobs[k], loopback_amounts[k], loopback_types[k]);
+            command_release(NODE, (char*)ctx->lan_ip ,loopback_jobs[k], loopback_types[k], loopback_amounts[k]);
         }
         for (int k = 0; k < affected_count; k++) {
-            // command_job_release(NODE, affected_jobs_cache[k]);
+            command_job_release_and_denied(NODE, affected_jobs_cache[k]);
         }
         pthread_mutex_unlock(&juani_mutex);
-
-        return;
     }
     
     if (action == ACTION_NEW_NODE_DISCOVERED) {
@@ -223,7 +224,7 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
         // --- CASO 0: GET_NODES ---
         if (strncmp(BUFFER, "GET_NODES", 9) == 0) {
             pthread_mutex_lock(&juani_mutex);
-            // command_get_nodes(NODE, juani_out, BUFFER_SIZE); 
+            command_get_nodes(NODE, juani_out, BUFFER_SIZE); 
             pthread_mutex_unlock(&juani_mutex);
             
             if (strlen(juani_out) > 0) {
@@ -241,10 +242,8 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
             
             if (parse_reserve_release(BUFFER, &job_id, &type, &quantity)) {
                 pthread_mutex_lock(&juani_mutex);
-                // unsigned granted = command_reserve(NODE, SENDER_IP, SOCKET, job_id, type, quantity);
+                unsigned granted = command_reserve(NODE, SENDER_IP, SOCKET, job_id, type, quantity);
                 pthread_mutex_unlock(&juani_mutex);
-                
-                unsigned granted = 1; // Dummy
                 
                 if (granted) {
                     sprintf(outbox[0].message, "GRANTED %u\n", job_id);
@@ -262,7 +261,7 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
             
             if (parse_reserve_release(BUFFER, &job_id, &type, &quantity)) {
                 pthread_mutex_lock(&juani_mutex);
-                // command_release(NODE, SENDER_IP, job_id, type, quantity);
+                command_release(NODE, SENDER_IP, job_id, type, quantity);
                 pthread_mutex_unlock(&juani_mutex);
             }
             return;
@@ -289,7 +288,7 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
                 }
 
                 pthread_mutex_lock(&juani_mutex);
-                // command_job_request(NODE, job_id, ips_ptrs, ports, types, amounts, petition_count);
+                command_job_request(NODE, job_id, ips_ptrs, ports, types, amounts, petition_count);
                 pthread_mutex_unlock(&juani_mutex);
 
                 // Esta función tiene su propio rwlock adentro
@@ -316,16 +315,36 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
             unsigned job_id;
             
             if (parse_single_id_cmd(BUFFER, &job_id)) {
-                pthread_mutex_lock(&juani_mutex);
-                // unsigned job_fully_granted = command_granted(NODE, job_id, SENDER_IP, puerto); 
-                pthread_mutex_unlock(&juani_mutex);
-                
-                int job_fully_granted = 0; // Dummy
+                unsigned sender_port = 0;
 
-                if (job_fully_granted) {
-                    sprintf(outbox[0].message, "JOB_GRANTED %u\n", job_id);
-                    outbox[0].target_fd = SOCKET; 
-                    *outbox_count = 1;
+                // 1. Buscamos el puerto en nuestra tabla de ruteo usando Lock de Lectura
+                pthread_rwlock_rdlock(&registry_rwlock);
+                for (int i = 0; i < MAX_TRACKED_JOBS; i++) {
+                    if (active_jobs_registry[i].is_active && active_jobs_registry[i].job_id == job_id) {
+                        for (unsigned j = 0; j < active_jobs_registry[i].petition_count; j++) {
+                            if (strcmp(active_jobs_registry[i].petitions[j].ip, SENDER_IP) == 0) {
+                                sender_port = active_jobs_registry[i].petitions[j].port;
+                                break; // Encontramos la IP, cortamos el bucle interno
+                            }
+                        }
+                        break; // Encontramos el trabajo, cortamos el bucle externo
+                    }
+                }
+                pthread_rwlock_unlock(&registry_rwlock);
+
+                // 2. Si encontramos el puerto, procedemos con la lógica de negocio
+                if (sender_port != 0) {
+                    pthread_mutex_lock(&juani_mutex);
+                    // Usamos el puerto rescatado y eliminamos el "Dummy"
+                    unsigned job_fully_granted = command_granted(NODE, job_id, SENDER_IP, sender_port); 
+                    pthread_mutex_unlock(&juani_mutex);
+
+                    if (job_fully_granted) {
+                        sprintf(outbox[0].message, "JOB_GRANTED %u\n", job_id);
+                        // El mensaje va dirigido a Erlang, no al nodo que respondió
+                        outbox[0].target_fd = ctx->active_erlang_fd; 
+                        *outbox_count = 1;
+                    }
                 }
             }
             return;
@@ -385,11 +404,13 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
                 // FASE 2: LOCK DE NEGOCIO 
                 pthread_mutex_lock(&juani_mutex);
                 for (int k = 0; k < loopback_count; k++) {
-                    // command_release(NODE, job_id, loopback_amounts[k], loopback_types[k]);
+                    // CORREGIDO: Se agregó la IP y se ordenó tipo -> cantidad
+                    command_release(NODE, (char*)ctx->lan_ip, job_id, loopback_types[k], loopback_amounts[k]);
                 }
 
                 if (strncmp(BUFFER, "JOB_RELEASE", 11) == 0) {
-                    // command_job_release(NODE, job_id);
+                    // CORREGIDO: Nombre correcto de la función
+                    command_job_release_and_denied(NODE, job_id);
                 } else {
                     // command_denied(NODE, job_id);
                 }
