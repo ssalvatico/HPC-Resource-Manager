@@ -7,6 +7,7 @@ init(NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
   init(#{}, NRequests, Test).
 %% i.e State = #{sender_pid => Pid, receiver_pid => Pid, JobId1 => [Resources], JobId2 => ...}
 init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
+
   receive
     {receiver_pid, ReceiverId} ->
       State1 = maps:put(receiver_pid, ReceiverId, State),
@@ -15,14 +16,17 @@ init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
       init(State1, NRequests, Test);
     
     {sender_pid, SenderId} ->
+      InitPid = self(),
       State1 = maps:put(sender_pid, SenderId, State),
       spawn(fun() -> request_nodes(SenderId) end),
-      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] sender_pid received", none),
+      spawn(fun() -> state_tick(InitPid) end),
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "sender_pid received", none),
+      io:fwrite("[Erlang][INIT] sender_pid=~p~n", [SenderId]),
       init(State1, NRequests, Test);
     
     {job_release, JobId} ->
       State1 = maps:remove(JobId, State),
-      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] releasing job", JobId),
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "releasing job", JobId),
       init(State1, NRequests, Test);
 
     dump_state ->
@@ -105,6 +109,11 @@ request_nodes(SenderId) ->
   timer:sleep(?GET_NODES_INTERVAL),
   SenderId ! {get_nodes},
   request_nodes(SenderId).
+
+state_tick(SchedulerPid) ->
+  timer:sleep(?GET_NODES_INTERVAL),
+  SchedulerPid ! dump_state,
+  state_tick(SchedulerPid).
 
 
 
