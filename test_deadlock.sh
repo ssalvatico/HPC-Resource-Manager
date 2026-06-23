@@ -6,6 +6,12 @@
 # reserved and released without deadlock. That does not prove deadlock is
 # impossible forever, but it gives a useful signal about the behavior.
 
+#In two different consoles insert: 
+# ./test_deadlock.sh 127.0.0.2 8001 2 8000 1
+# ./test_deadlock.sh 127.0.0.1 8000 2 8000 0 
+# This will compile an execute both the C-Agent and his respective Erlang scheduler. 
+# You should see Deadlock never happen.
+
 set -euo pipefail
 
 if [[ $# -ne 5 ]]; then
