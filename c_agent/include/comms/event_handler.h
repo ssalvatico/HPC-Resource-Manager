@@ -3,6 +3,7 @@
 
 #define MAX_EVENTS 10
 #include "server_types.h"
+#include "../resources/node-structures.h"
 #include <stdint.h>
 #include <pthread.h>
 
@@ -116,6 +117,8 @@ void handle_gc_timer_expiration(ServerContext* ctx);
  */
 void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count);
 
+void resource_adapter_patch(node_data_t NODE, char * SENDER_IP, unsigned SOCKET, const char * BUFFER, out_msg_t * outbox, int * outbox_count, JuaniAction action);
+
 /**
  * @brief Retrieves the IP address of the remote peer connected to a socket.
  * * Reference: man 2 getpeername, man 3 inet_ntoa.
@@ -126,5 +129,7 @@ void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count);
  * @return Void.
  */
 void get_ip_from_fd(int fd, char* ip_buffer);
+
+int find_fd_by_ip(const char* target_ip);
 
 #endif
