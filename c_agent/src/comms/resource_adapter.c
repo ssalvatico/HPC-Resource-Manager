@@ -6,9 +6,42 @@
 
 #include <pthread.h>
 
+#define MAX_TRACKED_JOBS 100
+#define MAX_NODES_PER_JOB 20
+
+typedef struct {
+    char ip[16];
+    unsigned port;
+    resource_t type;
+    unsigned amount;
+} parsed_petition_t;
+
+// El Registro Completo del Trabajo (Agrupa las peticiones por job_id)
+typedef struct {
+    unsigned job_id;
+    int is_active;
+    unsigned petition_count;
+    parsed_petition_t petitions[MAX_NODES_PER_JOB];
+} job_record_t;
+
+// La memoria estatica del adaptador de red
+static job_record_t active_jobs_registry[MAX_TRACKED_JOBS] = {0};
+
 pthread_mutex_t juani_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-void resource_adapter_patch(node_data_t NODE, char * SENDER_IP, unsigned SOCKET, const char * BUFFER, out_msg_t * outbox, int * outbox_count, JuaniAction action) {
+// ==========================================
+// PROTOTIPOS DE FUNCIONES AUXILIARES
+// ==========================================
+static int parse_reserve_release(const char* buffer, unsigned* job_id, resource_t* type, unsigned* quantity);
+static int parse_announce(const char* buffer, unsigned* port, unsigned* cpu, unsigned* ram, unsigned* gpu);
+static int parse_job_request(const char* buffer, unsigned* job_id, parsed_petition_t* petitions, unsigned* petition_count, unsigned max_petitions);
+static int parse_single_id_cmd(const char* buffer, unsigned* job_id);
+static void register_job(unsigned job_id, parsed_petition_t* petitions, unsigned count);
+
+// ==========================================
+// ADAPTADOR DE RECURSOS PRINCIPAL
+// ==========================================
+void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_IP, unsigned SOCKET, const char * BUFFER, out_msg_t * outbox, int * outbox_count, JuaniAction action) {
     char juani_out[BUFFER_SIZE] = {0};
     if (outbox_count) *outbox_count = 0;
 
@@ -17,60 +50,170 @@ void resource_adapter_patch(node_data_t NODE, char * SENDER_IP, unsigned SOCKET,
     // ----------------------------------------------------------------------
     if (action == ACTION_GET_RESOURCES) {
         unsigned cpu, gpu, ram;
-        // Get resources from the resource manager
         pthread_mutex_lock(&juani_mutex); 
         get_local_resources(NODE, &cpu, &gpu, &ram);
         pthread_mutex_unlock(&juani_mutex);
-        // We get the port from unsigned  socket, juani do not manage socket 
-        int tcp_public_port = SOCKET; // we call it socket but its not a socket je
-        // "ANNOUNCE port cpu:X mem:Y gpu:Z"
-        sprintf(outbox[0].message, "ANNOUNCE %d cpu:%u mem:%u gpu:%u\n", tcp_public_port, cpu, ram, gpu);
+        
+        sprintf(outbox[0].message, "ANNOUNCE %d cpu:%u mem:%u gpu:%u\n", ctx->port, cpu, ram, gpu);
         *outbox_count = 1;
         return;
     }
+    
     if (action == ACTION_CHECK_DEADNODES) {
-        unsigned target_socket;
-        while (chk_job_request(NODE, BUFFER, BUFFER_SIZE, &target_socket) != -1) {
-            strcpy(outbox[*outbox_count].message, BUFFER);
-            outbox[*outbox_count].target_fd = target_socket;  // acá usás el socket
-            (*outbox_count)++;
+        char dead_ips[50][16]; 
+        unsigned dead_count = 0;
+
+        pthread_mutex_lock(&juani_mutex);
+        // dead_count = command_check_dead_nodes(NODE, dead_ips, 50); 
+        pthread_mutex_unlock(&juani_mutex);
+
+        for (unsigned d = 0; d < dead_count; d++) {
+            const char* dead_ip = dead_ips[d];
+
+            for (int i = 0; i < MAX_TRACKED_JOBS; i++) {
+                if (active_jobs_registry[i].is_active) {
+                    
+                    int job_is_affected = 0;
+                    
+                    for (unsigned j = 0; j < active_jobs_registry[i].petition_count; j++) {
+                        if (strcmp(active_jobs_registry[i].petitions[j].ip, dead_ip) == 0) {
+                            job_is_affected = 1;
+                            break;
+                        }
+                    }
+
+                    if (job_is_affected) {
+                        unsigned affected_job_id = active_jobs_registry[i].job_id;
+
+                        // A. Mandar RELEASE a los nodos vivos
+                        for (unsigned j = 0; j < active_jobs_registry[i].petition_count; j++) {
+                            char* ip_destino = active_jobs_registry[i].petitions[j].ip;
+                            
+                            if (strcmp(ip_destino, dead_ip) != 0) {
+                                // === OPTIMIZACIÓN LOOPBACK ===
+                                if (strcmp(ip_destino, ctx->lan_ip) == 0) {
+                                    pthread_mutex_lock(&juani_mutex);
+                                    // command_release(NODE, affected_job_id, active_jobs_registry[i].petitions[j].amount, active_jobs_registry[i].petitions[j].type);
+                                    pthread_mutex_unlock(&juani_mutex);
+                                } else {
+                                    char res_str[4];
+                                    if      (active_jobs_registry[i].petitions[j].type == CPU) strcpy(res_str, "cpu");
+                                    else if (active_jobs_registry[i].petitions[j].type == GPU) strcpy(res_str, "gpu");
+                                    else if (active_jobs_registry[i].petitions[j].type == RAM) strcpy(res_str, "mem");
+
+                                    sprintf(outbox[*outbox_count].message, "RELEASE %u %s %u\n", affected_job_id, res_str, active_jobs_registry[i].petitions[j].amount);
+                                    strcpy(outbox[*outbox_count].target_ip, ip_destino);
+                                    outbox[*outbox_count].target_port = active_jobs_registry[i].petitions[j].port;
+                                    outbox[*outbox_count].target_fd = -1;
+                                    (*outbox_count)++;
+                                }
+                            }
+                        }
+
+                        // B. Avisar a Erlang
+                        sprintf(outbox[*outbox_count].message, "JOB_DENIED %u\n", affected_job_id);
+                        outbox[*outbox_count].target_fd = ctx->erlang_tcp_fd; 
+                        (*outbox_count)++;
+
+                        // C. Limpiar en Juani
+                        pthread_mutex_lock(&juani_mutex);
+                        // command_job_release(NODE, affected_job_id);
+                        pthread_mutex_unlock(&juani_mutex);
+
+                        active_jobs_registry[i].is_active = 0;
+                    }
+                }
+            }
+        }
+        return;
+    }
+    
+    if (action == ACTION_DISCONNECTED) {
+        const char* dead_ip = SENDER_IP; 
+
+        for (int i = 0; i < MAX_TRACKED_JOBS; i++) {
+            if (active_jobs_registry[i].is_active) {
+                
+                int job_is_affected = 0;
+                
+                for (unsigned j = 0; j < active_jobs_registry[i].petition_count; j++) {
+                    if (strcmp(active_jobs_registry[i].petitions[j].ip, dead_ip) == 0) {
+                        job_is_affected = 1;
+                        break;
+                    }
+                }
+
+                if (job_is_affected) {
+                    unsigned affected_job_id = active_jobs_registry[i].job_id;
+
+                    // A. Mandar RELEASE a los vivos
+                    for (unsigned j = 0; j < active_jobs_registry[i].petition_count; j++) {
+                        char* ip_destino = active_jobs_registry[i].petitions[j].ip;
+                        
+                        if (strcmp(ip_destino, dead_ip) != 0) {
+                            // === OPTIMIZACIÓN LOOPBACK ===
+                            if (strcmp(ip_destino, ctx->lan_ip) == 0) {
+                                pthread_mutex_lock(&juani_mutex);
+                                // command_release(NODE, affected_job_id, active_jobs_registry[i].petitions[j].amount, active_jobs_registry[i].petitions[j].type);
+                                pthread_mutex_unlock(&juani_mutex);
+                            } else {
+                                char res_str[4];
+                                if      (active_jobs_registry[i].petitions[j].type == CPU) strcpy(res_str, "cpu");
+                                else if (active_jobs_registry[i].petitions[j].type == GPU) strcpy(res_str, "gpu");
+                                else if (active_jobs_registry[i].petitions[j].type == RAM) strcpy(res_str, "mem");
+
+                                sprintf(outbox[*outbox_count].message, "RELEASE %u %s %u\n", affected_job_id, res_str, active_jobs_registry[i].petitions[j].amount);
+                                strcpy(outbox[*outbox_count].target_ip, ip_destino);
+                                outbox[*outbox_count].target_port = active_jobs_registry[i].petitions[j].port;
+                                outbox[*outbox_count].target_fd = -1;
+                                (*outbox_count)++;
+                            }
+                        }
+                    }
+
+                    // B. Avisar a Erlang
+                    sprintf(outbox[*outbox_count].message, "JOB_DENIED %u\n", affected_job_id);
+                    outbox[*outbox_count].target_fd = ctx->erlang_tcp_fd; 
+                    (*outbox_count)++;
+
+                    // C. Limpiar en Juani
+                    pthread_mutex_lock(&juani_mutex);
+                    // command_job_release(NODE, affected_job_id);
+                    pthread_mutex_unlock(&juani_mutex);
+
+                    active_jobs_registry[i].is_active = 0;
+                }
+            }
         }
 
-        char * ext_ips[50];
-        resource_t ext_types[50];
-        unsigned ext_amounts[50];
-        unsigned target_socket; // CORRECCIÓN: Le quité el asterisco para que no sea un puntero no inicializado (peligro de crash)
-        // FUNCION JUANI PENDIENTE
-
-        return;
-    }
-
-    if (action == ACTION_NEW_NODE_DISCOVERED) {
-        // Le pasamos el datagrama para que guarde el nuevo nodo en su Hash Table
         pthread_mutex_lock(&juani_mutex);
-        master_function(NODE, SENDER_IP, SOCKET, BUFFER, juani_out, BUFFER_SIZE);
+        release_jobs_by_socket(NODE, SOCKET);
         pthread_mutex_unlock(&juani_mutex);
+
         return;
     }
-
-    if (action == ACTION_DISCONNECTED) {
-        // Llamado a funcion juani que gestiona nodos muertos 
-        // tiene que borrar todas los jobs que esten relacionados a este nodo
-        // solo tengo como informacion el fd del mismo 
+    
+    if (action == ACTION_NEW_NODE_DISCOVERED) {
+        unsigned discovered_port, cpu, gpu, ram;
+        // CORRECCIÓN: Uso del ampersand (&) para el paso por referencia de memoria
+        if(parse_announce(BUFFER, &discovered_port, &cpu, &ram, &gpu)){
+            //command_announce(NODE, SENDER_IP, discovered_port, cpu, ram, gpu);
+        }
         return;
     }
 
     // ----------------------------------------------------------------------
-    // 2. EVENTOS TCP Y PRE-PARSING DE MENSAJES (Erlang)
+    // 2. EVENTOS TCP Y PRE-PARSING DE MENSAJES (Erlang y otros Nodos)
     // ----------------------------------------------------------------------
+    
     if (action == ACTION_RESPOND && BUFFER != NULL) {
-        
-        char * ext_ips[50];
-        resource_t ext_types[50];
-        unsigned ext_amounts[50];
 
+        // --- CASO 0: GET_NODES ---
         if (strncmp(BUFFER, "GET_NODES", 9) == 0) {
-            master_function(NODE, (char*)SENDER_IP, SOCKET, BUFFER, juani_out, BUFFER_SIZE);
+            pthread_mutex_lock(&juani_mutex);
+            // command_get_nodes(NODE, juani_out, BUFFER_SIZE); 
+            pthread_mutex_unlock(&juani_mutex);
+            
             if (strlen(juani_out) > 0) {
                 strcpy(outbox[0].message, juani_out);
                 outbox[0].target_fd = SOCKET;
@@ -78,96 +221,238 @@ void resource_adapter_patch(node_data_t NODE, char * SENDER_IP, unsigned SOCKET,
             }
             return;
         }
-        // --- CASO A: JOB_REQUEST  ---
-        if (strncmp(BUFFER, "JOB_REQUEST", 11) == 0) {
-            unsigned job_id;
-            sscanf(BUFFER, "JOB_REQUEST %u", &job_id);
+
+        // --- CASO 1: RESERVE ---
+        else if (strncmp(BUFFER, "RESERVE", 7) == 0) {
+            unsigned job_id, quantity;
+            resource_t type;
             
-            // agruega a su tabla hash
-            pthread_mutex_lock(&juani_mutex);
-            master_function(NODE, (char*)SENDER_IP, SOCKET, BUFFER, juani_out, BUFFER_SIZE);
-
-            // nos da la data
-            unsigned count = get_job_data(NODE, job_id, ext_ips, ext_types, ext_amounts, 50);
-            pthread_mutex_unlock(&juani_mutex);
-            // hacemos mensaje y lo ponemos en el buzon
-            for (unsigned i = 0; i < count; i++) {
-                char res_str[4];
-                if      (ext_types[i] == CPU) strcpy(res_str, "cpu");
-                else if (ext_types[i] == GPU) strcpy(res_str, "gpu");
-                else if (ext_types[i] == RAM) strcpy(res_str, "mem");
-
-                sprintf(outbox[i].message, "RESERVE %u %s %u\n", job_id, res_str, ext_amounts[i]);
-                strcpy(outbox[i].target_ip, ext_ips[i]);
+            if (parse_reserve_release(BUFFER, &job_id, &type, &quantity)) {
                 pthread_mutex_lock(&juani_mutex);
-                unsigned node_port = get_node_port(NODE, ext_ips[i]);
+                // unsigned granted = command_reserve(NODE, SENDER_IP, SOCKET, job_id, type, quantity);
                 pthread_mutex_unlock(&juani_mutex);
-                outbox[i].target_port = node_port;
-                outbox[i].target_fd = -1; // Le decimos a la capa de red que lo enrute por IP
-                // aunque ya le hayamos pasado el nodo capaz que ya tiene abierto un canal
+                
+                unsigned granted = 1; // Dummy
+                
+                if (granted) {
+                    sprintf(outbox[0].message, "GRANTED %u\n", job_id);
+                    outbox[0].target_fd = SOCKET; 
+                    *outbox_count = 1;
+                }
             }
-            *outbox_count = count;
+            return;
         }
+
+        // --- CASO 2: RELEASE ---
+        else if (strncmp(BUFFER, "RELEASE", 7) == 0) {
+            unsigned job_id, quantity;
+            resource_t type;
+            
+            if (parse_reserve_release(BUFFER, &job_id, &type, &quantity)) {
+                pthread_mutex_lock(&juani_mutex);
+                // command_release(NODE, SENDER_IP, job_id, type, quantity);
+                pthread_mutex_unlock(&juani_mutex);
+            }
+            return;
+        }
+
+        // --- CASO 3: JOB_REQUEST ---
+        else if (strncmp(BUFFER, "JOB_REQUEST", 11) == 0) {
+            unsigned job_id;
+            parsed_petition_t petitions[MAX_NODES_PER_JOB];
+            unsigned petition_count = 0;
+            
+            if (parse_job_request(BUFFER, &job_id, petitions, &petition_count, MAX_NODES_PER_JOB)) {
+                
+                char* ips_ptrs[MAX_NODES_PER_JOB]; 
+                unsigned ports[MAX_NODES_PER_JOB];
+                resource_t types[MAX_NODES_PER_JOB];
+                unsigned amounts[MAX_NODES_PER_JOB];
         
-        // --- CASO B: JOB_RELEASE o DENIED  ---
+                for(unsigned i = 0; i < petition_count; i++) {
+                    ips_ptrs[i] = petitions[i].ip; 
+                    ports[i]    = petitions[i].port;
+                    types[i]    = petitions[i].type;
+                    amounts[i]  = petitions[i].amount;          
+                }
+
+                pthread_mutex_lock(&juani_mutex);
+                // command_job_request(NODE, job_id, ips_ptrs, ports, types, amounts, petition_count);
+                pthread_mutex_unlock(&juani_mutex);
+
+                register_job(job_id, petitions, petition_count);
+
+                for (unsigned i = 0; i < petition_count; i++) {
+                    char res_str[4];
+                    if      (petitions[i].type == CPU) strcpy(res_str, "cpu");
+                    else if (petitions[i].type == GPU) strcpy(res_str, "gpu");
+                    else if (petitions[i].type == RAM) strcpy(res_str, "mem");
+
+                    sprintf(outbox[i].message, "RESERVE %u %s %u\n", job_id, res_str, petitions[i].amount);
+                    strcpy(outbox[i].target_ip, petitions[i].ip);
+                    outbox[i].target_port = petitions[i].port;
+                    outbox[i].target_fd = -1;
+                }
+                *outbox_count = petition_count;
+            }
+            return;
+        }
+
+        // --- CASO 4: GRANTED ---
+        else if (strncmp(BUFFER, "GRANTED", 7) == 0) {
+            unsigned job_id;
+            
+            if (parse_single_id_cmd(BUFFER, &job_id)) {
+                pthread_mutex_lock(&juani_mutex);
+                // unsigned job_fully_granted = command_granted(NODE, job_id, SENDER_IP); 
+                pthread_mutex_unlock(&juani_mutex);
+                
+                int job_fully_granted = 0; // Dummy
+
+                if (job_fully_granted) {
+                    sprintf(outbox[0].message, "JOB_GRANTED %u\n", job_id);
+                    outbox[0].target_fd = SOCKET; 
+                    *outbox_count = 1;
+                }
+            }
+            return;
+        }
+
+        // --- CASO 5: JOB_RELEASE o DENIED ---
         else if (strncmp(BUFFER, "JOB_RELEASE", 11) == 0 || strncmp(BUFFER, "DENIED", 6) == 0) {
             unsigned job_id;
-            sscanf(BUFFER, "%*s %u", &job_id);
             
-            // misma logica de arriba pero llamo a master cuando termino de extraer datos 
-            pthread_mutex_lock(&juani_mutex);
-            unsigned count = get_job_data(NODE, job_id, ext_ips, ext_types, ext_amounts, 50);
-            pthread_mutex_unlock(&juani_mutex);
-            for (unsigned i = 0; i < count; i++) {
-                char res_str[4];
-                if      (ext_types[i] == CPU) strcpy(res_str, "cpu");
-                else if (ext_types[i] == GPU) strcpy(res_str, "gpu");
-                else if (ext_types[i] == RAM) strcpy(res_str, "mem");
-
-                if (strncmp(BUFFER, "JOB_RELEASE", 11)==0){
-                    sprintf(outbox[i].message, "RELEASE %u %s %u\n", job_id, res_str, ext_amounts[i]);
-                }else{
-                    sprintf(outbox[i].message, "DENIED %u\n", job_id);
-                }
+            if (parse_single_id_cmd(BUFFER, &job_id)) {
                 
-                strcpy(outbox[i].target_ip, ext_ips[i]);
-                pthread_mutex_lock(&juani_mutex);
-                unsigned node_port = get_node_port(NODE, ext_ips[i]);
-                pthread_mutex_unlock(&juani_mutex);
-                outbox[i].target_port = node_port;
-                outbox[i].target_fd = -1; 
-            }
-            *outbox_count = count;
+                for (int i = 0; i < MAX_TRACKED_JOBS; i++) {
+                    if (active_jobs_registry[i].is_active && active_jobs_registry[i].job_id == job_id) {
+                        
+                        for (unsigned j = 0; j < active_jobs_registry[i].petition_count; j++) {
+                            char* ip_destino = active_jobs_registry[i].petitions[j].ip;
+                            
+                            if (strcmp(ip_destino, SENDER_IP) != 0) {
+                                // === OPTIMIZACIÓN LOOPBACK ===
+                                if (strcmp(ip_destino, ctx->lan_ip) == 0) {
+                                    pthread_mutex_lock(&juani_mutex);
+                                    // command_release(NODE, job_id, active_jobs_registry[i].petitions[j].amount, active_jobs_registry[i].petitions[j].type);
+                                    pthread_mutex_unlock(&juani_mutex);
+                                } else {
+                                    char res_str[4];
+                                    if      (active_jobs_registry[i].petitions[j].type == CPU) strcpy(res_str, "cpu");
+                                    else if (active_jobs_registry[i].petitions[j].type == GPU) strcpy(res_str, "gpu");
+                                    else if (active_jobs_registry[i].petitions[j].type == RAM) strcpy(res_str, "mem");
 
-            // en este caso si es denied juani devueleve el mensaje para el erlang, sino es 
-            // job release solo borro datos
-            pthread_mutex_lock(&juani_mutex); 
-            master_function(NODE, (char*)SENDER_IP, SOCKET, BUFFER, juani_out, BUFFER_SIZE);
-            pthread_mutex_unlock(&juani_mutex);
-            
-            if(strncmp(BUFFER, "DENIED", 6) == 0){
-                // ACA JAUNI DEBERIA DE RESPONDER JOB_DENIED
-                // CORRECCIÓN: Lógica de incremento y asignación reparada
-                strcpy(outbox[*outbox_count].message, juani_out);
-                outbox[*outbox_count].target_fd = SOCKET; 
-                (*outbox_count)++; 
-            }   
-        }
-        // --- CASO D: COMANDOS SIMPLES (GRANTED, RESERVE, JOB_GRANTED, GET_NODES) ---
-        else {
-            // GET_NODES_RESPUESTA INMEDIATA
-            // JOB_GRANTED SIN RESPUESTA
-            // GRANTED POSIBLE RESPUESTA DE LONGITUD 1 (JOB_GRANTED)
-            // RESERVE POSIBLE RESPUESTA DE LONGITUD 1 (GRANTED)
-            pthread_mutex_lock(&juani_mutex);
-            master_function(NODE, (char*)SENDER_IP, SOCKET, BUFFER, juani_out, BUFFER_SIZE);
-            pthread_mutex_unlock(&juani_mutex);
-            // Si la función de Juani nos devolvio algo para responder
-            if (strlen(juani_out) > 0) {
-                strcpy(outbox[0].message, juani_out);
-                outbox[0].target_fd = SOCKET; // Respuesta inmediata por el mismo FD
-                *outbox_count = 1;
+                                    sprintf(outbox[*outbox_count].message, "RELEASE %u %s %u\n", job_id, res_str, active_jobs_registry[i].petitions[j].amount);
+                                    strcpy(outbox[*outbox_count].target_ip, ip_destino);
+                                    outbox[*outbox_count].target_port = active_jobs_registry[i].petitions[j].port;
+                                    outbox[*outbox_count].target_fd = -1;
+                                    (*outbox_count)++;
+                                }
+                            }
+                        }
+                        active_jobs_registry[i].is_active = 0;
+                        break; 
+                    }
+                }
+
+                if (strncmp(BUFFER, "DENIED", 6) == 0) {
+                    sprintf(outbox[*outbox_count].message, "JOB_DENIED %u\n", job_id);
+                    outbox[*outbox_count].target_fd = ctx->erlang_tcp_fd; 
+                    (*outbox_count)++;
+                }
+
+                pthread_mutex_lock(&juani_mutex);
+                if (strncmp(BUFFER, "JOB_RELEASE", 11) == 0) {
+                    // command_job_release(NODE, job_id);
+                } else {
+                    // command_denied(NODE, job_id);
+                }
+                pthread_mutex_unlock(&juani_mutex);
             }
+            return;
+        }
+    }
+}
+
+// =====================================================
+// PARSING 
+
+static int parse_reserve_release(const char* buffer, unsigned* job_id, resource_t* type, unsigned* quantity) {
+    char cmd[32];
+    char res_str[32];
+    
+    if (sscanf(buffer, "%31s %u %31s %u", cmd, job_id, res_str, quantity) == 4) {
+        if      (strcmp(res_str, "cpu") == 0) *type = CPU;
+        else if (strcmp(res_str, "gpu") == 0) *type = GPU;
+        else if (strcmp(res_str, "mem") == 0) *type = RAM;
+        else return 0;
+        return 1;
+    }
+    return 0;
+}
+
+static int parse_announce(const char* buffer, unsigned* port, unsigned* cpu, unsigned* ram, unsigned* gpu) {
+    if (sscanf(buffer, "ANNOUNCE %u cpu:%u mem:%u gpu:%u", port, cpu, ram, gpu) == 4) {
+        return 1;
+    }
+    return 0;
+}
+
+static int parse_job_request(const char* buffer, unsigned* job_id, parsed_petition_t* petitions, unsigned* petition_count, unsigned max_petitions) {
+    char cmd[32];
+    
+    if (sscanf(buffer, "%31s %u", cmd, job_id) != 2) return 0;
+    if (strcmp(cmd, "JOB_REQUEST") != 0) return 0;
+    
+    *petition_count = 0;
+    
+    const char *p = strchr(buffer, '@');
+    while (p != NULL && *petition_count < max_petitions) {
+        char ip[16];
+        unsigned port;
+        char res_str[32];
+        unsigned amount;
+        
+        if (sscanf(p, "@%15[^:]:%u:%31[^:]:%u", ip, &port, res_str, &amount) == 4) {
+            strcpy(petitions[*petition_count].ip, ip);
+            petitions[*petition_count].port = port;
+            petitions[*petition_count].amount = amount;
+            
+            if      (strcmp(res_str, "cpu") == 0) petitions[*petition_count].type = CPU;
+            else if (strcmp(res_str, "gpu") == 0) petitions[*petition_count].type = GPU;
+            else if (strcmp(res_str, "mem") == 0) petitions[*petition_count].type = RAM;
+            
+            (*petition_count)++;
+        }
+        p = strchr(p + 1, '@');
+    }
+    
+    return (*petition_count > 0) ? 1 : 0;
+}
+
+static int parse_single_id_cmd(const char* buffer, unsigned* job_id) {
+    char cmd[32];
+    if (sscanf(buffer, "%31s %u", cmd, job_id) == 2) {
+        return 1;
+    }
+    return 0;
+}
+
+// ==========================================================
+// AUX FUNCTIONS
+
+static void register_job(unsigned job_id, parsed_petition_t* petitions, unsigned count) {
+    for (int i = 0; i < MAX_TRACKED_JOBS; i++) {
+        if (!active_jobs_registry[i].is_active) {
+            active_jobs_registry[i].job_id = job_id;
+            active_jobs_registry[i].petition_count = (count < MAX_NODES_PER_JOB) ? count : MAX_NODES_PER_JOB;
+            
+            for (unsigned j = 0; j < active_jobs_registry[i].petition_count; j++) {
+                active_jobs_registry[i].petitions[j] = petitions[j];
+            }
+            
+            active_jobs_registry[i].is_active = 1;
+            break;
         }
     }
 }
