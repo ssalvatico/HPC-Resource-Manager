@@ -13,6 +13,8 @@
 
 #define SIZE    20  
 #define TIMEOUT 15
+#define MAX_JOB_RESOURCES 50
+#define JOB_TIMEOUT 20
 
 typedef enum { FALSE = 0, TRUE = 1, STATES = 2 }        state_t;
 
@@ -69,6 +71,7 @@ typedef TablaHash own_jobs_t;           // hash table of elem_own_job_t
 
 typedef struct{
     char *      node_ip;
+    unsigned    node_port;
     unsigned    quantity;
     state_t     state;
 }elem_petition_t;
@@ -77,6 +80,16 @@ typedef TablaHash petitions_t;
 
 typedef struct{
     unsigned    job_id;
+    unsigned    owner_socket;
+    state_t     grant_notified;
+    time_t      created_at;
+    time_t      last_progress_at;
+    unsigned    ordered_count;
+    unsigned    ordered_next;
+    char *      ordered_ip[MAX_JOB_RESOURCES];
+    unsigned    ordered_port[MAX_JOB_RESOURCES];
+    resource_t  ordered_type[MAX_JOB_RESOURCES];
+    unsigned    ordered_quantity[MAX_JOB_RESOURCES];
     petitions_t resource_petitions[RES_NUM];    
 }elem_owned_job_t;
 
@@ -109,7 +122,7 @@ char * strduplicate(const char *s){
 
 static void     dest_job_request    (elem_job_request_t * elem)                         { free(elem); }
 static void *   copy_job_request    (elem_job_request_t * elem)                         { return elem; }
-static int      comp_job_request    (elem_job_request_t * a, elem_job_request_t * b)    { return (a -> job_id != b -> job_id); }
+static int      comp_job_request    (elem_job_request_t * a, elem_job_request_t * b)    { return (a -> job_id != b -> job_id || a -> resource_type != b -> resource_type); }
 
 static elem_job_request_t * create_job_request( unsigned id, unsigned socket, unsigned quantity, resource_t type){
     elem_job_request_t * out = malloc(sizeof(elem_job_request_t));
@@ -129,8 +142,8 @@ static elem_job_request_t * create_job_request( unsigned id, unsigned socket, un
 
 static void     dest_active_job     (elem_active_job_t * elem)                          { free(elem); }
 static void *   copy_active_job     (elem_active_job_t * elem)                          { return elem; }
-static int      comp_active_job     (elem_active_job_t * a, elem_active_job_t * b)      { return (a -> job_id != b -> job_id); }
-static unsigned hash_active_job     (elem_active_job_t * elem)                          { return (elem -> job_id); }
+static int      comp_active_job     (elem_active_job_t * a, elem_active_job_t * b)      { return (a -> job_id != b -> job_id || a -> resource_type != b -> resource_type); }
+static unsigned hash_active_job     (elem_active_job_t * elem)                          { return (elem -> job_id * RES_NUM + elem -> resource_type); }
 
 static elem_active_job_t * create_elem_active_job( unsigned id,  unsigned quantity, resource_t type){
     elem_active_job_t * out = malloc(sizeof(elem_active_job_t));
@@ -149,7 +162,7 @@ static elem_active_job_t * create_elem_active_job( unsigned id,  unsigned quanti
 
 static void     dest_known_node     (elem_known_nodes_t * elem)                         { free(elem -> node_ip) ; free(elem); }
 static void *   copy_known_node     (elem_known_nodes_t * elem)                         { return elem; }
-static int      comp_known_node     (elem_known_nodes_t * a, elem_known_nodes_t * b)    { return strcmp(a -> node_ip, b -> node_ip) != 0; }
+static int      comp_known_node     (elem_known_nodes_t * a, elem_known_nodes_t * b)    { return strcmp(a -> node_ip, b -> node_ip) != 0 || a -> node_port != b -> node_port; }
 static unsigned hash_known_node     (elem_known_nodes_t * elem)                         {
     unsigned hash = 5381;
     char * ip = elem -> node_ip;
@@ -157,6 +170,7 @@ static unsigned hash_known_node     (elem_known_nodes_t * elem)                 
     while (*ip)
         hash = ((hash << 5) + hash) + (unsigned char)*ip++;
 
+    hash = ((hash << 5) + hash) + elem -> node_port;
     return hash;
 }
 
@@ -179,7 +193,7 @@ static elem_known_nodes_t * create_elem_known_node( char * ip, unsigned port, un
 
 static void     dest_rec_petition   (elem_petition_t * elem)                            { free(elem -> node_ip); free(elem); }
 static void *   copy_rec_petition   (elem_petition_t * elem)                            { return elem; }
-static int      comp_rec_petition   (elem_petition_t * a, elem_petition_t * b)          { return strcmp(a -> node_ip, b -> node_ip) != 0; }
+static int      comp_rec_petition   (elem_petition_t * a, elem_petition_t * b)          { return strcmp(a -> node_ip, b -> node_ip) != 0 || a -> node_port != b -> node_port; }
 static unsigned hash_rec_petition   (elem_petition_t * elem)                            {
     unsigned hash = 5381;
     char * ip = elem -> node_ip;
@@ -187,17 +201,19 @@ static unsigned hash_rec_petition   (elem_petition_t * elem)                    
     while (*ip)
         hash = ((hash << 5) + hash) + (unsigned char)*ip++;
 
+    hash = ((hash << 5) + hash) + elem -> node_port;
     return hash;
 }
 
-static elem_petition_t *    create_elem_petition( char * ip, unsigned quantity){
+static elem_petition_t *    create_elem_petition( char * ip, unsigned port, unsigned quantity){
     elem_petition_t * out = malloc(sizeof(elem_petition_t));
 
     if(out == NULL) { return NULL; }
 
-    out -> node_ip  = strduplicate(ip);
-    out -> quantity = quantity;
-    out -> state    = FALSE;
+    out -> node_ip      = strduplicate(ip);
+    out -> node_port    = port;
+    out -> quantity     = quantity;
+    out -> state        = FALSE;
 
     return out;
 }
@@ -216,6 +232,18 @@ static elem_owned_job_t *   create_owned_job(unsigned job_id){
     if(out == NULL) { return NULL; }
 
     out -> job_id = job_id;
+    out -> owner_socket = 0;
+    out -> grant_notified = FALSE;
+    out -> created_at = time(NULL);
+    out -> last_progress_at = out -> created_at;
+    out -> ordered_count = 0;
+    out -> ordered_next = 0;
+    for (unsigned idx = 0; idx < MAX_JOB_RESOURCES; idx++) {
+        out -> ordered_ip[idx] = NULL;
+        out -> ordered_port[idx] = 0;
+        out -> ordered_type[idx] = CPU;
+        out -> ordered_quantity[idx] = 0;
+    }
     for( int type = 0 ; type < RES_NUM ; type++ ) {
         out -> resource_petitions[type] = create_petitions() ; 
         if (out -> resource_petitions[type] == NULL){
@@ -234,6 +262,9 @@ static elem_owned_job_t *   create_owned_job(unsigned job_id){
 static void     dest_owned_job      (elem_owned_job_t * elem)                           {
     if(elem == NULL) { return; }
     
+    for (unsigned idx = 0; idx < elem -> ordered_count; idx++) {
+        free(elem -> ordered_ip[idx]);
+    }
     for( int type = 0 ; type < RES_NUM ; type++ ) { delete_petitions(elem -> resource_petitions[type]); }
 
     free(elem);
@@ -337,19 +368,41 @@ int chk_job_request (node_data_t NODE, char * OUT, unsigned OUT_SIZE, unsigned *
 // JOB REQUEST MANAGING
 
 static void del_active_job (local_resources_t * resources, active_jobs_t jobs, unsigned job_id){
-    
-    elem_active_job_t * dummy = create_elem_active_job(job_id, 0, 0);
-    if( dummy == NULL) return;
+    for (resource_t type = 0; type < RES_NUM; type++) {
+        elem_active_job_t * dummy = create_elem_active_job(job_id, 0, type);
+        if(dummy == NULL) return;
 
-    elem_active_job_t * job_actual = tablahash_buscar(jobs, dummy);
+        elem_active_job_t * job_actual = tablahash_buscar(jobs, dummy);
 
-    if(job_actual == NULL) { dest_active_job(dummy) ; return ;}
+        if(job_actual != NULL) {
+            resources->avail[job_actual -> resource_type] += job_actual -> resource_quantity;
+            tablahash_eliminar(jobs, dummy);
+        }
 
-    resources->avail[job_actual -> resource_type] += job_actual -> resource_quantity;
+        dest_active_job(dummy);
+    }
+}
 
-    tablahash_eliminar(jobs, dummy);
+static void del_pending_job_requests(local_resources_t * resources, unsigned job_id){
+    for (resource_t type = 0; type < RES_NUM; type++) {
+        queue_t act = resources -> request_queue[type];
 
-    dest_active_job(dummy);
+        while (!queue_empty(act)) {
+            elem_job_request_t * elem = act -> data;
+
+            if (elem -> job_id == job_id) {
+                resources -> request_queue[type] = queue_delete(
+                    resources -> request_queue[type],
+                    elem,
+                    (FuncionDestructora)dest_job_request,
+                    (FuncionComparadora)comp_job_request
+                );
+                act = resources -> request_queue[type];
+            } else {
+                act = act -> next;
+            }
+        }
+    }
 }
 
 /********************************************** */
@@ -495,7 +548,7 @@ static int  command_parse_announce       (const char * buffer, unsigned * node_p
     return out;
 }
 
-static int  command_parse_job_request    (const char * buffer, owned_jobs_t jobs){
+static int  command_parse_job_request    (const char * buffer, owned_jobs_t jobs, unsigned owner_socket){
     const char *p = buffer;
     unsigned job_id;
     char cmd[32];
@@ -508,6 +561,7 @@ static int  command_parse_job_request    (const char * buffer, owned_jobs_t jobs
 
     elem_owned_job_t * out = create_owned_job(job_id); 
     if(out == NULL) return 0;
+    out -> owner_socket = owner_socket;
     
     p = strchr(p, ' ');
     if (!p) return 0;
@@ -524,12 +578,13 @@ static int  command_parse_job_request    (const char * buffer, owned_jobs_t jobs
         char ip[16];
         char resource[32];
         unsigned amount;
+        unsigned port;
         resource_t      type;
         elem_petition_t *act;
 
-        int n = sscanf(p,"@%15[^:]:%31[^:]:%u",ip,resource,&amount);
+        int n = sscanf(p,"@%15[^:]:%u:%31[^:]:%u",ip,&port,resource,&amount);
         
-        if (n != 3){
+        if (n != 4){
             dest_owned_job(out);
             return 0;
         };
@@ -542,12 +597,27 @@ static int  command_parse_job_request    (const char * buffer, owned_jobs_t jobs
             return 0;
         }
 
-        act = create_elem_petition(ip, amount);
+        act = create_elem_petition(ip, port, amount);
 
         if(act == NULL){
             dest_owned_job(out);
             return 0;
         }
+
+        if (out -> ordered_count >= MAX_JOB_RESOURCES) {
+            dest_owned_job(out);
+            return 0;
+        }
+
+        out -> ordered_ip[out -> ordered_count] = strduplicate(ip);
+        if (out -> ordered_ip[out -> ordered_count] == NULL) {
+            dest_owned_job(out);
+            return 0;
+        }
+        out -> ordered_port[out -> ordered_count] = port;
+        out -> ordered_type[out -> ordered_count] = type;
+        out -> ordered_quantity[out -> ordered_count] = amount;
+        out -> ordered_count++;
 
         tablahash_insertar(out -> resource_petitions[type], act);
         
@@ -608,11 +678,32 @@ static int command_parse_denied          (const char * buffer, unsigned * job_id
 // EXPORT FUNCTIONS
 
 static char **      ip_out;
+static unsigned *   port_out;
 static resource_t * type_out;
 static unsigned *   quantity_out;
 static unsigned     out_cont;
 static unsigned     out_size; 
 static resource_t   act_type;
+
+static unsigned *          timeout_job_ids_out;
+static unsigned *          timeout_owner_sockets_out;
+static unsigned            timeout_out_cont;
+static unsigned            timeout_out_size;
+
+static void collect_timeout_job(elem_owned_job_t * job){
+    if (timeout_out_cont >= timeout_out_size)
+        return;
+
+    if (job -> grant_notified)
+        return;
+
+    if (difftime(time(NULL), job -> created_at) <= JOB_TIMEOUT)
+        return;
+
+    timeout_job_ids_out[timeout_out_cont] = job -> job_id;
+    timeout_owner_sockets_out[timeout_out_cont] = job -> owner_socket;
+    timeout_out_cont++;
+}
 
 node_data_t node_init   (unsigned cpu, unsigned gpu, unsigned ram){
     node_data_t node = malloc(sizeof(node_data_t_));
@@ -639,7 +730,7 @@ void        node_dest   (node_data_t node){
     free(node);
 }
 
-unsigned master_function(node_data_t NODE, char * NODE_IP, unsigned SOCKET, const char * BUFFER, char * OUT, unsigned OUT_SIZE){      // receives C agent's message, parses it and mannage data structures according to pettition
+unsigned master_function(node_data_t NODE, char * NODE_IP, unsigned NODE_PORT, unsigned SOCKET, const char * BUFFER, char * OUT, unsigned OUT_SIZE){      // receives C agent's message, parses it and mannage data structures according to pettition
     unsigned out_message = 0;
 
     command_t task = command_get_command(BUFFER);
@@ -658,9 +749,11 @@ unsigned master_function(node_data_t NODE, char * NODE_IP, unsigned SOCKET, cons
             unsigned    job_id;
             unsigned    quantity;
             resource_t  type;
-            if(command_parse_release(BUFFER, &job_id, &quantity, &type))   del_active_job(NODE -> resources, NODE -> active_jobs, job_id);
+            if(command_parse_release(BUFFER, &job_id, &quantity, &type)) {
+                del_pending_job_requests(NODE -> resources, job_id);
+                del_active_job(NODE -> resources, NODE -> active_jobs, job_id);
+            }
             else return ERROR;
-            //chk_job_request(NODE -> resources, NODE -> active_jobs);
             return SOLVED;
         }
         case CMD_ANNOUNCE:      {
@@ -677,7 +770,7 @@ unsigned master_function(node_data_t NODE, char * NODE_IP, unsigned SOCKET, cons
             return SOLVED;
         }
         case CMD_JOB_REQUEST:   {
-            return (command_parse_job_request(BUFFER, NODE -> owned_jobs)) ? SOLVED : ERROR;
+            return (command_parse_job_request(BUFFER, NODE -> owned_jobs, SOCKET)) ? SOLVED : ERROR;
         }
         case CMD_JOB_RELEASE:   {
             unsigned job_id;
@@ -712,7 +805,7 @@ unsigned master_function(node_data_t NODE, char * NODE_IP, unsigned SOCKET, cons
                 return ERROR;
             }
 
-            elem_petition_t * dummy2 = create_elem_petition(NODE_IP, 0);
+            elem_petition_t * dummy2 = create_elem_petition(NODE_IP, NODE_PORT, 0);
             if(!dummy2) { return ERROR; }
             elem_petition_t * act;
             for (unsigned type = 0 ; type < RES_NUM ; type++ ){
@@ -728,8 +821,10 @@ unsigned master_function(node_data_t NODE, char * NODE_IP, unsigned SOCKET, cons
             if(!cond)
                 return ERROR;
 
-            if(check_job_granted(NODE -> owned_jobs, job_id))
-                snprintf(OUT, OUT_SIZE, "JOB_GRANTED %u", job_id);
+            if(!job -> grant_notified && check_job_granted(NODE -> owned_jobs, job_id)) {
+                snprintf(OUT, OUT_SIZE, "JOB_GRANTED %u\n", job_id);
+                job -> grant_notified = TRUE;
+            }
 
             return cond ? SOLVED : ERROR ;
         }
@@ -759,15 +854,24 @@ void get_petition_data(elem_petition_t * act){
     quantity_out[out_cont] = act -> quantity;
     type_out    [out_cont] = act_type;
     ip_out      [out_cont] = act -> node_ip;
+    port_out    [out_cont] = act -> node_port;
     
     out_cont++;
 }
 
-unsigned get_job_data(node_data_t NODE, unsigned job_id, char * arr_ip[], resource_t arr_type[], unsigned quantity[], const unsigned size){
+void get_granted_petition_data(elem_petition_t * act){
+    if (act -> state != TRUE)
+        return;
+
+    get_petition_data(act);
+}
+
+static unsigned get_job_data_with_visitor(node_data_t NODE, unsigned job_id, char * arr_ip[], unsigned arr_port[], resource_t arr_type[], unsigned quantity[], const unsigned size, FuncionVisitante visitor){
     out_cont = 0;
     out_size = size;
 
     ip_out          = arr_ip;
+    port_out        = arr_port;
     type_out        = arr_type;
     quantity_out    = quantity;
 
@@ -783,59 +887,70 @@ unsigned get_job_data(node_data_t NODE, unsigned job_id, char * arr_ip[], resour
     for ( unsigned type = 0 ; type < RES_NUM && out_cont < out_size; type++){
         act_type = type;
         act_petitions = job -> resource_petitions[type];
-        tablahash_visitar(act_petitions, (FuncionVisitante)get_petition_data);
+        tablahash_visitar(act_petitions, visitor);
     }
 
     return out_cont;
+}
+
+unsigned get_job_data(node_data_t NODE, unsigned job_id, char * arr_ip[], unsigned arr_port[], resource_t arr_type[], unsigned quantity[], const unsigned size){
+    return get_job_data_with_visitor(NODE, job_id, arr_ip, arr_port, arr_type, quantity, size, (FuncionVisitante)get_petition_data);
+}
+
+unsigned get_granted_job_data(node_data_t NODE, unsigned job_id, char * arr_ip[], unsigned arr_port[], resource_t arr_type[], unsigned quantity[], const unsigned size){
+    return get_job_data_with_visitor(NODE, job_id, arr_ip, arr_port, arr_type, quantity, size, (FuncionVisitante)get_granted_petition_data);
+}
+
+unsigned get_next_job_data(node_data_t NODE, unsigned job_id, char ** ip, unsigned * port, resource_t * type, unsigned * quantity){
+    elem_owned_job_t * dummy    = create_owned_job(job_id);
+    elem_owned_job_t * job      = tablahash_buscar(NODE -> owned_jobs, dummy);
+
+    dest_owned_job(dummy);
+
+    if (job == NULL || job -> ordered_next >= job -> ordered_count) return 0;
+
+    unsigned idx = job -> ordered_next;
+    if (ip)       *ip       = job -> ordered_ip[idx];
+    if (port)     *port     = job -> ordered_port[idx];
+    if (type)     *type     = job -> ordered_type[idx];
+    if (quantity) *quantity = job -> ordered_quantity[idx];
+
+    job -> ordered_next++;
+    job -> last_progress_at = time(NULL);
+    return 1;
+}
+
+unsigned get_job_owner_socket(node_data_t NODE, unsigned job_id){
+    elem_owned_job_t * dummy    = create_owned_job(job_id);
+    elem_owned_job_t * job      = tablahash_buscar(NODE -> owned_jobs, dummy);
+
+    dest_owned_job(dummy);
+
+    if (job == NULL) return 0;
+    return job -> owner_socket;
+}
+
+unsigned collect_timed_out_jobs(node_data_t NODE, unsigned job_ids[], unsigned owner_sockets[], const unsigned size){
+    timeout_job_ids_out = job_ids;
+    timeout_owner_sockets_out = owner_sockets;
+    timeout_out_cont = 0;
+    timeout_out_size = size;
+
+    tablahash_visitar(NODE -> owned_jobs, (FuncionVisitante)collect_timeout_job);
+
+    return timeout_out_cont;
+}
+
+void remove_owned_job(node_data_t NODE, unsigned job_id){
+    elem_owned_job_t * dummy = create_owned_job(job_id);
+    if(dummy == NULL) return;
+
+    tablahash_eliminar(NODE -> owned_jobs, dummy);
+    dest_owned_job(dummy);
 }
 
 void get_local_resources(node_data_t NODE, unsigned * cpu_quantity, unsigned * gpu_quantity, unsigned * mem_quantity){
     if(cpu_quantity) { * cpu_quantity = (NODE -> resources -> avail)[CPU]; }    
     if(gpu_quantity) { * gpu_quantity = (NODE -> resources -> avail)[GPU]; }
     if(mem_quantity) { * mem_quantity = (NODE -> resources -> avail)[RAM]; }    
-}
-
-// ==================================================================
-// MODIFICACIONES LUCIO 
-
-unsigned get_node_port(node_data_t NODE, const char * ip) {
-    // Dummy for ip search
-    elem_known_nodes_t * dummy = create_elem_known_node((char*)ip, 0, 0, 0, 0);
-    if (dummy == NULL) return 0;
-    
-    // Buscamos en la tabla hash de nodos conocidos
-    elem_known_nodes_t * found = tablahash_buscar(NODE->known_nodes, dummy);
-    
-    // Destruimos el nodo temporal para no perder memoria
-    dest_known_node(dummy);
-    
-    if (found != NULL) {
-        return found->node_port;
-    }
-    
-    return 0; // Retorna 0 si el nodo no existe en la tabla
-}
-
-void release_jobs_by_socket(node_data_t NODE, unsigned socket) {
-    local_resources_t * resources   = NODE->resources;
-
-    for (unsigned type = 0; type < RES_NUM; type++) {
-        queue_t act = resources->request_queue[type];
-        
-        while (!queue_empty(act)) {
-            elem_job_request_t * elem = act->data;
-            
-            if (elem->socket == socket) {
-                resources->request_queue[type] = queue_delete(
-                    resources->request_queue[type],
-                    elem,
-                    (FuncionDestructora)dest_job_request,
-                    (FuncionComparadora)comp_job_request
-                );
-                act = resources->request_queue[type];
-            } else {
-                act = act->next;
-            }
-        }
-    }
 }

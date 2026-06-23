@@ -3,12 +3,10 @@
 #include "include/comms/event_handler.h"
 #include "include/comms/thread_pool.h"
 #include "include/resources/node-structures.h"
-//#include "include/resources/mock_resource_manager.h"
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
 #include <signal.h> 
 #include <unistd.h>
 
