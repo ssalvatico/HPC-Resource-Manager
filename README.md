@@ -1,32 +1,76 @@
-# HPC-Resource-Manager - How To Run
+### HPC-Resource-Manager — How To Run
+
+---
+## Quick start (recommended)
+
+From the project root, compile both components with:
+
+`make`
+
+Then start the C agent and Erlang scheduler separately (see below).
 
 
-### Step 1 — Compile the modules
-Run the following command to compile all Erlang source files:
+---
+## Step 1 — Compile
 
-*make*
+To compile both components at once:
 
-This will generate `.beam` files for `erlang_c_bridge`, `event_logger` 
-and `job_scheduler`.
+`make`
 
-### Step 2 — Start the C Agent + Erlang Agent
-Before starting the scheduler, make sure the C agent is already running 
-and listening on the host and port defined in `header.hrl`. 
-The scheduler will try to connect to it automatically.
+To compile each component individually:
 
-### Step 3 — Start the Erlang scheduler
-Once the C agent is running, start the scheduler with:
+`make c-build` — compiles the C agent into `c_agent/c_build`
 
-*make run*
+`make erlang-build` — compiles Erlang modules into `erlang/ebin/`
 
-The scheduler will connect to the C agent, request the list of available 
+
+---
+## Step 2 — Start the C agent
+
+The C agent must be running before the Erlang scheduler starts.
+From the `c_agent/` directory:
+
+`make run`
+
+This starts the agent on port `8000` listening on `127.0.0.1`.
+To use a different port or IP, run directly:
+
+`./c_agent <port> <ip>`
+
+
+---
+## Step 3 — Start the Erlang scheduler
+
+Once the C agent is running, from the `erlang/` directory:
+
+`make run`
+
+The scheduler will connect to the C agent, request the list of available
 nodes, and begin generating and sending job requests.
 
-### Troubleshooting
-If the connection fails, the scheduler will retry up to `?TRIES` times. 
-If all attempts fail, it will log the error to `event_logger.txt` and exit.
+To run in test mode:
 
-### Clean up
-To remove all compiled files and the event log, run:
+`make run_test`
 
-*make clear*
+
+---
+## Troubleshooting
+
+If the connection fails, the scheduler will retry up to `?TRIES` times.
+If all attempts fail, it will log the error to `erlang/event_logger.txt` and exit.
+
+Make sure the C agent is running **before** starting the Erlang scheduler.
+
+
+---
+## Clean up
+
+To remove all compiled files and logs:
+
+`make clear`
+
+To clean each component individually:
+
+`make c-clear` — removes `c_agent/c_build/` and the `c_agent` binary
+
+`make erlang-clear` — removes `erlang/ebin/`, `event_logger.txt`, and any crash dumps
