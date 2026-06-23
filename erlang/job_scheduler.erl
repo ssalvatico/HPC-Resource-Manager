@@ -10,7 +10,8 @@ init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
   receive
     {receiver_pid, ReceiverId} ->
       State1 = maps:put(receiver_pid, ReceiverId, State),
-      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] receiver_pid received", none),
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "receiver_pid received", none),
+      io:fwrite("[Erlang][INIT] receiver_pid=~p~n", [ReceiverId]),
       init(State1, NRequests, Test);
     
     {sender_pid, SenderId} ->
@@ -23,57 +24,71 @@ init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
       State1 = maps:remove(JobId, State),
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] releasing job", JobId),
       init(State1, NRequests, Test);
+
+    dump_state ->
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "dump_state", maps:without([sender_pid, receiver_pid], State)),
+      io:fwrite("[Erlang][STATE] ~s~n", [format_state(State)]),
+      init(State, NRequests, Test);
     
     {packet_received, Packet} ->
-      io:fwrite("PACKET RECEIVED ~p ~n", [Packet]),
-      io:fwrite("ACTUAL STATE ~p ~n", [State]),
       case handle_packet(Packet) of 
         {node_records, NodeRecordList} ->
+          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "NODES received", length(NodeRecordList)),
+          io:fwrite("[Erlang][Recv] NODES count=~p~n", [length(NodeRecordList)]),
           NewState = lists:foldl(fun(_N, StateAcc) ->
             JobId = erlang:unique_integer([positive]),
-            {JobRequest, AvailableResources} = generate_job_request(JobId, NodeRecordList, Test),
-            event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_request", JobId),
+            {JobRequest, _AvailableResources} = generate_job_request(JobId, NodeRecordList, Test),
+            event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_request", JobId),
+            io:fwrite("[Erlang][Sent] job_request id=~p~n", [JobId]),
             SenderId = maps:get(sender_pid, State),
             SenderId ! {job_directive, JobId, JobRequest},
-            StateAcc#{JobId => {pending, AvailableResources}}
+            StateAcc#{JobId => pending}
           end, State, lists:seq(1, NRequests)),
           init(NewState, NRequests, Test);
         
         {job_granted, JobId} ->
+          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_granted", JobId),
+          io:fwrite("[Erlang][Recv] granted id=~p~n", [JobId]),
           case maps:get(JobId, State, undefined) of
-            {pending, Resources} ->
-              State1 = maps:put(JobId, {granted, Resources}, State),
+            pending ->
+              State1 = maps:put(JobId, granted, State),
               SchedulerPid = self(),
-              event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_granted", JobId),
               spawn(fun () -> simulate_load(JobId, State1, SchedulerPid) end),
               init(State1, NRequests, Test);
-            {granted, _Resources} ->
-              event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] duplicate job_granted ignored", JobId),
+            granted ->
+              event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "duplicate job_granted ignored", JobId),
+              io:fwrite("[Erlang][Recv] duplicate grant ignored id=~p~n", [JobId]),
               init(State, NRequests, Test);
             undefined ->
-              event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_granted for unknown job", JobId),
+              event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "job_granted for unknown job", JobId),
+              io:fwrite("[Erlang][ERR] grant for unknown id=~p~n", [JobId]),
               init(State, NRequests, Test);
             Other ->
               event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "Invalid state transition", JobId),
+              io:fwrite("[Erlang][ERR] invalid state transition id=~p state=~p~n", [JobId, Other]),
               throw(io:format("Invalid state transition ~p", [Other]))
           end;
 
         {job_denied, JobId} ->
           State1 = maps:remove(JobId, State),
-          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_denied", JobId),
+          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_denied", JobId),
+          io:fwrite("[Erlang][Recv] denied id=~p~n", [JobId]),
           init(State1, NRequests, Test);
 
         {job_timeout, JobId} ->
           State1 = maps:remove(JobId, State),
-          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_timeout", JobId),
+          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_timeout", JobId),
+          io:fwrite("[Erlang][Recv] timeout id=~p~n", [JobId]),
           init(State1, NRequests, Test);
 
         {skip, _} -> 
           event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "unknown packet received", none),
+          io:fwrite("[Erlang][Recv] unknown packet~n", []),
           init(State, NRequests, Test)
       end;
     {ok, get_nodes} ->
-      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] get_nodes sent succesfully", none),
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "get_nodes sent succesfully", none),
+      io:fwrite("[Erlang][Sent] get_nodes ok~n", []),
       init(State, NRequests, Test);
     
     {error, Reason} ->
@@ -262,3 +277,7 @@ simulate_load(JobId, State1, InitPid) ->
   event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "Executing job...", JobId),
   maps:get(sender_pid, State1) ! {job_directive, JobId, "JOB_RELEASE " ++ integer_to_list(JobId) ++ "\n"},
   InitPid ! {job_release, JobId}.
+
+format_state(State) ->
+  JobState = maps:without([sender_pid, receiver_pid], State),
+  io_lib:format("~p", [JobState]).
