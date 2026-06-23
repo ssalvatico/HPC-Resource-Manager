@@ -43,8 +43,9 @@ conn_handler(Socket, JobSchedulerId) ->
 receiver(Socket, JobSchedulerId) ->
     case gen_tcp:recv(Socket, 0, infinity) of
         {ok, Packet} ->
+            event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "PACKET RECEIVED", Packet),
             JobSchedulerId ! {packet_received, Packet},
-                                receiver(Socket, JobSchedulerId);
+            receiver(Socket, JobSchedulerId);
         {error, Reason} ->
             JobSchedulerId ! {error, Reason},
             event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
@@ -62,6 +63,8 @@ sender(Socket, JobSchedulerId) ->
         {get_nodes} ->
             case gen_tcp:send(Socket, <<"GET_NODES\n">>) of
                 ok ->
+                    event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "GET_NODES SENT", none),
+                    io:fwrite("[Erlang][Sent] GET_NODES~n", []),
                     JobSchedulerId ! {ok, get_nodes};
                 {error, Reason} ->
                     event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
@@ -71,10 +74,11 @@ sender(Socket, JobSchedulerId) ->
         {job_directive, JobId, Packet} ->
             case gen_tcp:send(Socket, Packet) of
                 ok ->
-                    io:fwrite("Sent ~p to Agent", [Packet]),
+                    event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, Packet, JobId),
+                    io:fwrite("[Erlang][Sent][job=~p] ~s", [JobId, Packet]),
                     JobSchedulerId ! {ok, JobId, job_directive};
                 {error, Reason} ->
-                    io:fwrite("Failed to sent ~p to Agent", [Packet]),
+                    io:fwrite("[Erlang][ERR][job=~p] ~p~n", [JobId, Reason]),
                     event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, JobId),
                     JobSchedulerId ! {error, JobId, job_directive}
             end
