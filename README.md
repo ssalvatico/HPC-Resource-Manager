@@ -5,7 +5,7 @@
 
 From the project root, compile both components with:
 
-*make*
+`make`
 
 Then start the C agent and Erlang scheduler separately (see below).
 
@@ -15,13 +15,13 @@ Then start the C agent and Erlang scheduler separately (see below).
 
 To compile both components at once:
 
-*make*
+`make`
 
 To compile each component individually:
 
-*make c-build* — compiles the C agent into `c_agent/c_build`
+`make c-build` — compiles the C agent into `c_agent/c_build`
 
-*make erlang-build* — compiles Erlang modules into `erlang/ebin/`
+`make erlang-build` — compiles Erlang modules into `erlang/ebin/`
 
 
 ---
@@ -30,7 +30,7 @@ To compile each component individually:
 The C agent must be running before the Erlang scheduler starts.
 From the `c_agent/` directory:
 
-*make run*
+`make run`
 
 This starts the agent on port `8000` listening on `127.0.0.1`.
 To use a different port or IP, run directly:
@@ -43,14 +43,14 @@ To use a different port or IP, run directly:
 
 Once the C agent is running, from the `erlang/` directory:
 
-*make run*
+`make run`
 
 The scheduler will connect to the C agent, request the list of available
 nodes, and begin generating and sending job requests.
 
 To run in test mode:
 
-*make run_test*
+`make run_test`
 
 
 ---
