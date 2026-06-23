@@ -2,9 +2,9 @@ CC = gcc
 
 CFLAGS = -Wall -Wextra -g -Iinclude -Iinclude/comms -Iinclude/resources -pthread
 
-SRCS = main.c \
-       $(wildcard src/comms/*.c) \
-       $(wildcard src/resources/*.c)
+SRCS = $(wildcard src/comms/*.c) \
+       $(wildcard src/resources/*.c) \
+			 main.c
 
 OBJDIR = c_build
 
@@ -14,7 +14,7 @@ build: c_agent
 
 c_agent: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
-	@echo "¡Compilación exitosa! Ejecuta con: ./c_agent <puerto> <ip>"
+	@echo "¡Compilación exitosa! Ejecuta con: ./c_agent <puerto> <ip> <cpu> <gpu> <ram>"
 
 # Regla genérica para compilar cada .c en un .o en su respectiva carpeta
 $(OBJDIR)/%.o: %.c
@@ -22,7 +22,7 @@ $(OBJDIR)/%.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 run: c_agent
-	./c_agent 8000 127.0.0.1
+	./c_agent 8000 127.0.0.1 4 1 4096
 
 clear:
 	rm -rf $(OBJDIR) c_agent

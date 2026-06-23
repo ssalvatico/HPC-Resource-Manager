@@ -2,7 +2,8 @@
 #include "include/comms/server_types.h"
 #include "include/comms/event_handler.h"
 #include "include/comms/thread_pool.h"
-#include "include/resources/mock_resource_manager.h"
+#include "include/resources/node-structures.h"
+//#include "include/resources/mock_resource_manager.h"
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <stdlib.h>
@@ -21,19 +22,23 @@ void handle_sigint(int sig) {
     server_running = 0; // Rompe el bucle principal
 }
 
-// parametro 1 programa 2 puerto 3 ip publica
+// ./c_agent <puerto> <ip> <cpu> <gpu> <ram>
 int main(int argc, char *argv[]) {
     // 1. Inicialización limpia y encapsulada
     ServerContext ctx;
     init_server(&ctx, argc, argv);
-    node_data_t my_node;
-    ctx.mynode = &my_node;
+    unsigned cpu = (unsigned)atoi(argv[3]);
+    unsigned gpu = (unsigned)atoi(argv[4]);
+    unsigned ram = (unsigned)atoi(argv[5]);
+    node_data_t my_node = node_init(cpu, gpu, ram);
+    ctx.mynode = my_node;
     init_thread_pool(&ctx, NUM_THREADS);
 
     //signal(SIGINT, handle_sigint);
 
     struct epoll_event events[MAX_EVENTS];
-    printf("Starting c_agent PORT: %d IP: %s\n", ctx.port, ctx.lan_ip);
+    printf("Starting c_agent PORT: %d IP: %s CPU: %u GPU: %u RAM: %u\n",
+           ctx.port, ctx.lan_ip, cpu, gpu, ram);
 
     // 2. El bucle Event-Dispatcher (Sin lógica mezclada)
     while(server_running) {
@@ -81,6 +86,7 @@ int main(int argc, char *argv[]) {
     }
 
     thread_pool_destroy();
+    node_dest(my_node);
     
     close(ctx.epollfd);
     close(ctx.tcp_public_fd);

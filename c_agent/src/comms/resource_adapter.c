@@ -30,17 +30,11 @@ void resource_adapter_patch(node_data_t NODE, char * SENDER_IP, unsigned SOCKET,
     }
     if (action == ACTION_CHECK_DEADNODES) {
         unsigned target_socket;
-        while (chk_job_request(NODE, BUFFER, BUFFER_SIZE, &target_socket) != -1) {
-            strcpy(outbox[*outbox_count].message, BUFFER);
+        while (chk_job_request(NODE, juani_out, BUFFER_SIZE, &target_socket) != -1) {
+            strcpy(outbox[*outbox_count].message, juani_out);
             outbox[*outbox_count].target_fd = target_socket;  // acá usás el socket
             (*outbox_count)++;
         }
-
-        char * ext_ips[50];
-        resource_t ext_types[50];
-        unsigned ext_amounts[50];
-        unsigned target_socket; // CORRECCIÓN: Le quité el asterisco para que no sea un puntero no inicializado (peligro de crash)
-        // FUNCION JUANI PENDIENTE
 
         return;
     }
