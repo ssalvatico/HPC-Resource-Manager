@@ -13,12 +13,14 @@ unsigned    master_function(node_data_t NODE, char * NODE_IP, unsigned SOCKET, c
 
 void        known_nodes_del_inactive_nodes(node_data_t node);
 
-int         chk_job_request (node_data_t NODE, char * OUT, unsigned OUT_SIZE);
+int         chk_job_request (node_data_t NODE, char * OUT, unsigned OUT_SIZE, unsigned *out_socket);
 
 unsigned    get_job_data(node_data_t NODE, unsigned job_id, char * arr_ip[], resource_t arr_type[], unsigned quantity[], const unsigned size);
 
 void        get_local_resources(node_data_t NODE, unsigned * cpu_quantity, unsigned * gpu_quantity, unsigned * mem_quantity);
 
-unsigned get_node_port(node_data_t NODE, const char * ip);
+unsigned    get_node_port(node_data_t NODE, const char * ip);
+
+void        release_jobs_by_socket(node_data_t NODE, unsigned socket);
 
 #endif

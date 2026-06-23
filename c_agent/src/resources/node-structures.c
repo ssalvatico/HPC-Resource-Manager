@@ -290,7 +290,7 @@ static unsigned new_job_request (local_resources_t * resources, active_jobs_t ac
     return id;
 }
 
-int chk_job_request (node_data_t NODE, char * OUT, unsigned OUT_SIZE){
+int chk_job_request (node_data_t NODE, char * OUT, unsigned OUT_SIZE, unsigned *out_socket){
     queue_t                 act         = NULL;
     elem_job_request_t  *   act_elem    = NULL;
     int out = -1;    
@@ -316,6 +316,9 @@ int chk_job_request (node_data_t NODE, char * OUT, unsigned OUT_SIZE){
             resources -> avail[type] -= act_elem -> resource_quantity;
 
             out = act_elem -> job_id;
+
+            if (out_socket != NULL)
+            *out_socket = act_elem -> socket;
 
             tablahash_insertar(active_jobs, create_elem_active_job(act_elem -> job_id, act_elem ->resource_quantity, type));
 
@@ -811,4 +814,29 @@ unsigned get_node_port(node_data_t NODE, const char * ip) {
     }
     
     return 0; // Retorna 0 si el nodo no existe en la tabla
+}
+
+void release_jobs_by_socket(node_data_t NODE, unsigned socket) {
+    local_resources_t * resources   = NODE->resources;
+
+    for (unsigned type = 0; type < RES_NUM; type++) {
+        queue_t act = resources->request_queue[type];
+        
+        while (!queue_empty(act)) {
+            elem_job_request_t * elem = act->data;
+            
+            if (elem->socket == socket) {
+                resources->request_queue[type] = queue_delete(
+                    resources->request_queue[type],
+                    elem,
+                    (FuncionDestructora)dest_job_request,
+                    (FuncionComparadora)comp_job_request
+                );
+                // Reiniciamos desde el principio porque la cola cambió
+                act = resources->request_queue[type];
+            } else {
+                act = act->next;
+            }
+        }
+    }
 }
