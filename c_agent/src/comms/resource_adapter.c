@@ -64,6 +64,15 @@ void resource_adapter_patch(node_data_t NODE, char * SENDER_IP, unsigned SOCKET,
         resource_t ext_types[50];
         unsigned ext_amounts[50];
 
+        if (strncmp(BUFFER, "GET_NODES", 9) == 0) {
+            master_function(NODE, (char*)SENDER_IP, SOCKET, BUFFER, juani_out, BUFFER_SIZE);
+            if (strlen(juani_out) > 0) {
+                strcpy(outbox[0].message, juani_out);
+                outbox[0].target_fd = SOCKET;
+                *outbox_count = 1;
+            }
+            return;
+        }
         // --- CASO A: JOB_REQUEST  ---
         if (strncmp(BUFFER, "JOB_REQUEST", 11) == 0) {
             unsigned job_id;
@@ -113,7 +122,7 @@ void resource_adapter_patch(node_data_t NODE, char * SENDER_IP, unsigned SOCKET,
                 if (strncmp(BUFFER, "JOB_RELEASE", 11)==0){
                     sprintf(outbox[i].message, "RELEASE %u %s %u\n", job_id, res_str, ext_amounts[i]);
                 }else{
-                    sprintf(outbox[i].message, "DENIED %u %s %u\n", job_id, res_str, ext_amounts[i]);
+                    sprintf(outbox[i].message, "DENIED %u\n", job_id);
                 }
                 
                 strcpy(outbox[i].target_ip, ext_ips[i]);
