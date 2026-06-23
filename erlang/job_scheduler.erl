@@ -7,63 +7,94 @@ init(NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
   init(#{}, NRequests, Test).
 %% i.e State = #{sender_pid => Pid, receiver_pid => Pid, JobId1 => [Resources], JobId2 => ...}
 init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
+
   receive
     {receiver_pid, ReceiverId} ->
       State1 = maps:put(receiver_pid, ReceiverId, State),
-      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] receiver_pid received", none),
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "receiver_pid received", none),
+      io:fwrite("[Erlang][INIT] receiver_pid=~p~n", [ReceiverId]),
       init(State1, NRequests, Test);
-    
+
     {sender_pid, SenderId} ->
+      InitPid = self(),
       State1 = maps:put(sender_pid, SenderId, State),
       spawn(fun() -> request_nodes(SenderId) end),
-      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] sender_pid received", none),
+      spawn(fun() -> state_tick(InitPid) end),
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "sender_pid received", none),
+      io:fwrite("[Erlang][INIT] sender_pid=~p~n", [SenderId]),
       init(State1, NRequests, Test);
-    
+
     {job_release, JobId} ->
       State1 = maps:remove(JobId, State),
-      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] releasing job", JobId),
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "releasing job", JobId),
       init(State1, NRequests, Test);
-    
+
+    dump_state ->
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "dump_state", maps:without([sender_pid, receiver_pid], State)),
+      io:fwrite("[Erlang][STATE] ~s~n", [format_state(State)]),
+      init(State, NRequests, Test);
+
     {packet_received, Packet} ->
-      case handle_packet(Packet) of 
+      case handle_packet(Packet) of
         {node_records, NodeRecordList} ->
+          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "NODES received", length(NodeRecordList)),
+          io:fwrite("[Erlang][Recv] NODES count=~p~n", [length(NodeRecordList)]),
           NewState = lists:foldl(fun(_N, StateAcc) ->
             JobId = erlang:unique_integer([positive]),
-            {JobRequest, AvailableResources} = generate_job_request(JobId, NodeRecordList, Test),
-            event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_request", JobId),
+            {JobRequest, _AvailableResources} = generate_job_request(JobId, NodeRecordList, Test),
+            event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_request", JobId),
+            io:fwrite("[Erlang][Sent] job_request id=~p~n", [JobId]),
             SenderId = maps:get(sender_pid, State),
             SenderId ! {job_directive, JobId, JobRequest},
-            StateAcc#{JobId => {pending, AvailableResources}}
+            StateAcc#{JobId => pending}
           end, State, lists:seq(1, NRequests)),
           init(NewState, NRequests, Test);
-        
+
         {job_granted, JobId} ->
-          State1 = maps:update_with(JobId, fun ({pending, Resources}) -> {granted, Resources};
-                                               ({_, _}) ->
-                                                  event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "Invalid state transition", JobId),
-                                                  throw("Invalid state transition") end, State),
-          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_granted", JobId),
-          spawn(fun () -> simulate_load(JobId, State1, self()) end),
-          init(State1, NRequests, Test);
+          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_granted", JobId),
+          io:fwrite("[Erlang][Recv] granted id=~p~n", [JobId]),
+          case maps:get(JobId, State, undefined) of
+            pending ->
+              State1 = maps:put(JobId, granted, State),
+              SchedulerPid = self(),
+              spawn(fun () -> simulate_load(JobId, State1, SchedulerPid) end),
+              init(State1, NRequests, Test);
+            granted ->
+              event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "duplicate job_granted ignored", JobId),
+              io:fwrite("[Erlang][Recv] duplicate grant ignored id=~p~n", [JobId]),
+              init(State, NRequests, Test);
+            undefined ->
+              event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "job_granted for unknown job", JobId),
+              io:fwrite("[Erlang][ERR] grant for unknown id=~p~n", [JobId]),
+              init(State, NRequests, Test);
+            Other ->
+              event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "Invalid state transition", JobId),
+              io:fwrite("[Erlang][ERR] invalid state transition id=~p state=~p~n", [JobId, Other]),
+              throw(io:format("Invalid state transition ~p", [Other]))
+          end;
 
         {job_denied, JobId} ->
           State1 = maps:remove(JobId, State),
-          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_denied", JobId),
+          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_denied", JobId),
+          io:fwrite("[Erlang][Recv] denied id=~p~n", [JobId]),
           init(State1, NRequests, Test);
 
         {job_timeout, JobId} ->
           State1 = maps:remove(JobId, State),
-          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] job_timeout", JobId),
+          event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_timeout", JobId),
+          io:fwrite("[Erlang][Recv] timeout id=~p~n", [JobId]),
           init(State1, NRequests, Test);
 
-        {skip, _} -> 
+        {skip, _} ->
           event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "unknown packet received", none),
+          io:fwrite("[Erlang][Recv] unknown packet~n", []),
           init(State, NRequests, Test)
       end;
     {ok, get_nodes} ->
-      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "[job_scheduler] get_nodes sent succesfully", none),
+      event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "get_nodes sent succesfully", none),
+      io:fwrite("[Erlang][Sent] get_nodes ok~n", []),
       init(State, NRequests, Test);
-    
+
     {error, Reason} ->
       event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
       halt()
@@ -75,14 +106,19 @@ init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
 %%% Runs indefinitely.
 %%% Params: SenderId (sender process PID)
 request_nodes(SenderId) ->
-  timer:sleep(5000),
+  timer:sleep(?GET_NODES_INTERVAL),
   SenderId ! {get_nodes},
   request_nodes(SenderId).
+
+state_tick(SchedulerPid) ->
+  timer:sleep(?GET_NODES_INTERVAL),
+  SchedulerPid ! dump_state,
+  state_tick(SchedulerPid).
 
 
 
 %%% Dispatches incoming TCP packets based on their prefix.
-%%% Returns tagged tuples: {node_records, List} | {job_granted, Id} | 
+%%% Returns tagged tuples: {node_records, List} | {job_granted, Id} |
 %%%                        {job_denied, Id} | {job_timeout, Id} | {skip, Reason}
 handle_packet(<<"NODES ", Rest/binary>>) ->
     NodeList = get_node_list(Rest),
@@ -90,7 +126,7 @@ handle_packet(<<"NODES ", Rest/binary>>) ->
     [] -> {skip, "No nodes available"};
     _ ->
       NodeRecordList = lists:map(fun get_node/1, NodeList),
-      {node_records, NodeRecordList}  
+      {node_records, NodeRecordList}
     end;
 handle_packet(<<"JOB_GRANTED ", Rest/binary>>) ->
     {job_granted, list_to_integer(string:trim(binary_to_list(Rest)))};
@@ -107,9 +143,10 @@ handle_packet(_) ->
 %%% Params: Packet (binary)
 get_node_list(Packet) ->
   String = binary:bin_to_list(Packet),
-  case String of
+  TrimmedString = string:trim(String),
+  case TrimmedString of
     "" -> [];
-    _ -> string:split(String, ";", all)
+    _ -> string:split(TrimmedString, ";", all)
   end.
 
 
@@ -128,7 +165,7 @@ get_node(Node) ->
 %%% Converts a flat list of alternating keys and values into tuples.
 %%% Example: ["cpu", "4", "gpu", "1"] -> [{"cpu", 4}, {"gpu", 1}]
 to_pairs([Key, Value | Rest]) ->
-    [{Key, list_to_integer(Value)} | to_pairs(Rest)];
+    [{Key, list_to_integer(string:trim(Value))} | to_pairs(Rest)];
 to_pairs([]) ->
     [].
 
@@ -137,12 +174,12 @@ to_pairs([]) ->
 assign_resource({"cpu", Amount}, NodeRecord) ->
     NodeRecord#node{cpu = Amount};
 assign_resource({"gpu", Amount}, NodeRecord) ->
-    NodeRecord#node{gpu = Amount}; 
+    NodeRecord#node{gpu = Amount};
 assign_resource({"mem", Amount}, NodeRecord) ->
     NodeRecord#node{mem = Amount}.
 
 
-  
+
 %% Auxiliar functions to generate a JOB_REQUEST
 
 %%% Generates a sorted JOB_REQUEST string and the list of requested resources.
@@ -155,7 +192,7 @@ generate_job_request(JobId, NodeRecordList, Test) ->
   %2. Pick N random nodes
   SelectedNodes = pick_random(N, NodeRecordList),
   %3. Pick random resources from SelectNodes
-  
+
   %% === ANTI DEADLOCK SORT === %%
   %% Sorting the Resources by resource name first and then by Ip.
   %% This garantees that if two different request requires the same resources from the same Node
@@ -172,14 +209,14 @@ generate_job_request(JobId, NodeRecordList, Test) ->
   %% When both request are fire at the same time, since the resources and Ips are sorted one of the JobId
   %% will "win" to acquire the `cpu:2` and then the other Job will be blocked waiting for that same reason.
   %% Hence, the first JobId can acquire the `gpu:1` because the other Job was not able to request that first.
-  
+
   % i.e [ {"192.168.1.2", mem, 100} , {"192.168.1.2",cpu, 2}, {"192.168.1.1", gpu, 1}, {"192.168.1.1", cpu, 4} ]
   AvailableResources = lists:flatten(lists:filtermap(fun(SelectedNode) -> pick_resources(SelectedNode) end, SelectedNodes)),
   % i.e [ {"192.168.1.2",[{cpu,2}, {mem,100}]}, {"192.168.1.1", [{cpu,4}, {gpu,1}]} ]
-  SortedResources = case Test of 
+  SortedResources = case Test of
     true -> AvailableResources;
-    false -> lists:sort(fun ({Ip1, Resource1, _}, {Ip2, Resource2, _}) ->
-                          {Ip1, resource_order(Resource1)} =< {Ip2, resource_order(Resource2)}
+    false -> lists:sort(fun ({Ip1, Port1, Resource1, _}, {Ip2, Port2, Resource2, _}) ->
+                          {Ip1, Port1, resource_order(Resource1)} =< {Ip2, Port2, resource_order(Resource2)}
                         end, AvailableResources)
   end,
   JobRequest = "JOB_REQUEST " ++ integer_to_list(JobId),
@@ -193,12 +230,12 @@ resource_order(gpu) -> 3.
 
 %%% Shuffles a list using random float keys. Used to randomize node/resource selection.
 shuffle(NodeRecordList) ->
-  % 1. Pair each element with a random float number 
+  % 1. Pair each element with a random float number
   Pairs = [{rand:uniform(), X} || X <- NodeRecordList],
-    
+
   % 2. Sort the pairs by their random float key
   SortedPairs = lists:keysort(1, Pairs),
-    
+
   % 3. Extract the original elements back into a flat list
   [X || {_, X} <- SortedPairs].
 
@@ -213,25 +250,32 @@ pick_random(N, NodeRecordList) ->
 
 %%% Selects a random subset of available resources from a node.
 %%% Returns {true, Resources} if resources are available, false otherwise.
-%%% Resources format: [{Ip, ResourceType, Amount}]
+%%% Resources format: [{Ip, Port, ResourceType, Amount}]
 pick_resources(SelectedNode) ->
   NodeResources = [{cpu, SelectedNode#node.cpu}, {mem, SelectedNode#node.mem}, {gpu, SelectedNode#node.gpu}],
   % Only consider available resources per Node
   AvailableResources = lists:filter(fun ({_, undefined}) -> false;
-                                        ({_, _}) -> true end, NodeResources),
+                                        ({_, N}) when is_integer(N), N > 0 -> true;
+                                        (_) -> false end, NodeResources),
+
   case AvailableResources of
     [] -> false;
     _ ->
+      %% COMMENTED OUT TO PICK EVERY AVAILABLE RESOURCE
+      %% TO BETTER TEST DEADLOCK with ./test_deadlock.sh
+
       % Choose how many resources pick
-      N = rand:uniform(length(AvailableResources)),
+      %% N = rand:uniform(length(AvailableResources)),
       % shuffle and take N
-      Shuffled = shuffle(AvailableResources),
-      Selected = lists:sublist(Shuffled, N),
+
+      %% Shuffled = shuffle(AvailableResources),
+      %% Selected = lists:sublist(Shuffled, N),
+      Selected = AvailableResources,
       % For each resource, pick an amount in range
       Resources = lists:map(fun({Res, Max}) ->
                               Amount = rand:uniform(Max),
                               % {cpu, 4}
-                              {SelectedNode#node.ip, Res, Amount}
+                              {SelectedNode#node.ip, SelectedNode#node.port, Res, Amount}
                             end, Selected),
       {true, Resources}
   end.
@@ -239,10 +283,10 @@ pick_resources(SelectedNode) ->
 
 
 %%% Builds a JOB_REQUEST string entry for a single resource.
-%%% Format: " @Ip:ResourceName:Amount"
-% i.e JOB REQUEST 1001 @192.168.1.2:cpu:2 @192.168.1.3:gpu:1
-build_job_request({Ip, Name, Amount}, Acc) ->
-  Acc ++ " @" ++ Ip ++ ":" ++ atom_to_list(Name) ++ ":" ++ integer_to_list(Amount).
+%%% Format: " @Ip:Port:ResourceName:Amount"
+% i.e JOB REQUEST 1001 @192.168.1.2:8000:cpu:2 @192.168.1.3:8001:gpu:1
+build_job_request({Ip, Port, Name, Amount}, Acc) ->
+  Acc ++ " @" ++ Ip ++ ":" ++ Port ++ ":" ++ atom_to_list(Name) ++ ":" ++ integer_to_list(Amount).
 
 
 
@@ -254,3 +298,7 @@ simulate_load(JobId, State1, InitPid) ->
   event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "Executing job...", JobId),
   maps:get(sender_pid, State1) ! {job_directive, JobId, "JOB_RELEASE " ++ integer_to_list(JobId) ++ "\n"},
   InitPid ! {job_release, JobId}.
+
+format_state(State) ->
+  JobState = maps:without([sender_pid, receiver_pid], State),
+  io_lib:format("~p", [JobState]).

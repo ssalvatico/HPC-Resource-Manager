@@ -17,9 +17,9 @@
  * This function creates an IPv4 (AF_INET), UDP (SOCK_DGRAM) socket. 
  * It sets the SO_REUSEADDR option to allow immediate port reuse. 
  * Crucially, it also enables the SO_BROADCAST option, allowing this exact 
- * same file descriptor to transmit broadcast messages (e.g., ANNOUNCE) 
- * to the entire subnet. Finally, it binds the socket to all available 
- * network interfaces (INADDR_ANY).
+ * same file descriptor to receive broadcast messages (e.g., ANNOUNCE) 
+ * from the entire subnet. It binds the socket to all available network
+ * interfaces (INADDR_ANY).
  * * @param port The port number to bind the UDP socket.
  * @return The file descriptor referencing the socket, or -1 on error.
  */
@@ -53,7 +53,7 @@ int process_discovery_datagram(const int udpsockfd, char* buffer, const int buff
  * @param message      The null-terminated string to be broadcasted (e.g., "ANNOUNCE").
  * @return The number of bytes sent on success, or -1 on error.
  */
-ssize_t broadcast_announce(const int sockfd, const int targetport, const char *message);
+ssize_t broadcast_announce(const char *source_ip, const int targetport, const char *message);
 
 /**
  * @brief Creates a non-blocking TCP listening socket bound to 

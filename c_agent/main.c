@@ -7,7 +7,6 @@
 #include <sys/types.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
 #include <signal.h> 
 #include <unistd.h>
 
@@ -21,21 +20,23 @@ void handle_sigint(int sig) {
     server_running = 0; // Rompe el bucle principal
 }
 
-/**
- * @param argc program executable
- * @param argv array with [ip, port, cpu, mem, gpu]
- * */ 
+// ./c_agent <ip> <puerto> <cpu> <gpu> <ram>
 int main(int argc, char *argv[]) {
     // 1. Inicialización limpia y encapsulada
     ServerContext ctx;
     init_server(&ctx, argc, argv);
-    ctx.mynode = node_init((unsigned)atoi(argv[3]), (unsigned)atoi(argv[4]), (unsigned)atoi(argv[5]));
+    unsigned cpu = (unsigned)atoi(argv[3]);
+    unsigned gpu = (unsigned)atoi(argv[4]);
+    unsigned ram = (unsigned)atoi(argv[5]);
+    node_data_t my_node = node_init(cpu, gpu, ram);
+    ctx.mynode = my_node;
     init_thread_pool(&ctx, NUM_THREADS);
 
     //signal(SIGINT, handle_sigint);
 
     struct epoll_event events[MAX_EVENTS];
-    printf("Starting c_agent PORT: %d IP: %s\n", ctx.port, ctx.lan_ip);
+    printf("Starting c_agent PORT: %d IP: %s CPU: %u GPU: %u RAM: %u\n",
+           ctx.port, ctx.lan_ip, cpu, gpu, ram);
 
     // 2. El bucle Event-Dispatcher (Sin lógica mezclada)
     while(server_running) {
@@ -83,6 +84,7 @@ int main(int argc, char *argv[]) {
     }
 
     thread_pool_destroy();
+    node_dest(my_node);
     
     close(ctx.epollfd);
     close(ctx.tcp_public_fd);

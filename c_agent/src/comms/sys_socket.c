@@ -19,6 +19,12 @@ int create_udp_listener_broadcaster(const int port) {
         close(sockfd);
         return -1;
     }
+#ifdef SO_REUSEPORT
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval)) < 0) {
+        close(sockfd);
+        return -1;
+    }
+#endif
     // allow broadcast
     if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &optval, sizeof(optval)) < 0) {
         close(sockfd);
@@ -58,15 +64,43 @@ int process_discovery_datagram(const int udpsockfd, char* buffer, const int buff
     return 0;
 }
 
-ssize_t broadcast_announce(const int sockfd, const int targetport, const char *message){
+ssize_t broadcast_announce(const char *source_ip, const int targetport, const char *message){
+    int sockfd;
+    struct sockaddr_in localaddr;
     struct sockaddr_in destaddr;
+
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd == -1) return -1;
+
+    int optval = 1;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &optval, sizeof(optval)) < 0) {
+        close(sockfd);
+        return -1;
+    }
+
+    memset(&localaddr, 0, sizeof(localaddr));
+    localaddr.sin_family = AF_INET;
+    localaddr.sin_addr.s_addr = inet_addr(source_ip);
+    localaddr.sin_port = htons(0);
+
+    if (bind(sockfd, (struct sockaddr*)&localaddr, sizeof(localaddr)) == -1) {
+        close(sockfd);
+        return -1;
+    }
+
     // 1. config
     memset(&destaddr, 0, sizeof(destaddr));
     destaddr.sin_family = AF_INET;
     destaddr.sin_addr.s_addr = INADDR_BROADCAST; // todas las computadoras conectadas a la red local
+    unsigned long local_ip = ntohl(localaddr.sin_addr.s_addr);
+    if ((local_ip & 0xff000000) == 0x7f000000) {
+        destaddr.sin_addr.s_addr = inet_addr("127.255.255.255");
+    }
     destaddr.sin_port = htons(targetport);
     // 2. send
-    return sendto(sockfd, message, strlen(message), 0,(struct sockaddr*)&destaddr, sizeof(destaddr));
+    ssize_t sent = sendto(sockfd, message, strlen(message), 0,(struct sockaddr*)&destaddr, sizeof(destaddr));
+    close(sockfd);
+    return sent;
 }
 
 int create_tcp_listener(const char* ip_address,const int port){
@@ -183,8 +217,23 @@ int connect_to_tcp_node(const char* target_ip, const int target_port) {
 
 int send_tcp_message(const int sockfd, const char* message) {
     // Don't generate a SIGPIPE signal if the peer on a tcp socket has closed the connection
-    int bytes = send(sockfd, message, strlen(message), MSG_NOSIGNAL);
-    return bytes;
+    size_t total = 0;
+    size_t len = strlen(message);
+
+    while (total < len) {
+        ssize_t bytes = send(sockfd, message + total, len - total, MSG_NOSIGNAL);
+        if (bytes > 0) {
+            total += (size_t)bytes;
+            continue;
+        }
+        if (bytes == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            usleep(1000);
+            continue;
+        }
+        return -1;
+    }
+
+    return (int)total;
 }
 
 ssize_t receive_tcp_message(const int sockfd, char* buffer,const size_t buffer_size){

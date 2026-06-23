@@ -14,7 +14,6 @@ typedef struct {
     int epollfd;
     int tcp_public_fd;
     int erlang_tcp_fd;
-    int active_erlang_fd;
     int udp_fd;
     int tcp_timerfd;
     int udp_timerfd;
@@ -24,8 +23,8 @@ typedef struct {
 
 typedef struct {
     int is_active;                      
-    char ip[16];
-    int port;                        
+    char ip[16];                        
+    unsigned port;
     char pending_message[BUFFER_SIZE];
     unsigned job_id;
 } ConnectionState;

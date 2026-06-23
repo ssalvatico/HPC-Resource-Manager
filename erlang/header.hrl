@@ -6,7 +6,8 @@
 -define(TIMESTAMP, calendar:local_time()).
 
 -define(TIMEOUT, 5000).
--define(WORK_TIME, 15000).
+-define(WORK_TIME, 5000).
+-define(GET_NODES_INTERVAL, 5000).
 -define(N_REQUESTS, 1).
 -define(TEST, false).
 

@@ -1,51 +1,30 @@
-# Ejecutable
-TARGET = build/c_agent
-
 CC = gcc
-CFLAGS = -Wall -Wextra -pthread -g
 
-INCLUDES = -Iinclude
+CFLAGS = -Wall -Wextra -g -Iinclude -Iinclude/comms -Iinclude/resources -pthread
 
-SRCS = main.c \
-       src/comms/event_handler.c \
-       src/comms/resource_adapter.c \
-       src/comms/server_init.c \
-       src/comms/sys_epoll.c \
-       src/comms/sys_socket.c \
-       src/comms/thread_pool.c \
-       src/resources/node-structures.c \
-       src/resources/queues.c \
-       src/resources/tablahash.c
+SRCS = $(wildcard src/comms/*.c) \
+       $(wildcard src/resources/*.c) \
+			 main.c
 
-OBJS = $(SRCS:%.c=build/%.o)
+OBJDIR = c_build
 
-all: $(TARGET)
+OBJS = $(addprefix $(OBJDIR)/,$(SRCS:.c=.o))
 
-# Crear directorios automáticamente
-build:
-	mkdir -p build
+build: c_agent
 
-build/src/comms:
-	mkdir -p build/src/comms
-
-build/src/resources:
-	mkdir -p build/src/resources
-
-# Link
-$(TARGET): $(OBJS)
+c_agent: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
+	@echo "¡Compilación exitosa! Ejecuta con: ./c_agent <ip> <puerto> <cpu> <gpu> <ram>"
 
-# Compile
-build/%.o: %.c | build build/src/comms build/src/resources
+# Regla genérica para compilar cada .c en un .o en su respectiva carpeta
+$(OBJDIR)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
-run: $(TARGET)
-	./build/c_agent 127.0.0.1 8000 4 8192 1
+run: c_agent
+	./c_agent 127.0.0.1 8000 4 1 4096
 
-clean:
-	rm -rf build
+clear:
+	rm -rf $(OBJDIR) c_agent
 
-clear: clean
-
-.PHONY: all run clean clear
+.PHONY: all run clear

@@ -10,7 +10,7 @@
 
 /**
  * @brief Structure to hold parsed data from a single resource petition.
- * * Used primarily to extract and store routing information (IP and port) 
+ * * Used primarily to extract and store routing information (IP and port)
  * alongside the requested resources from a complex JOB_REQUEST string.
  */
 typedef struct {
@@ -38,11 +38,11 @@ typedef struct {
 /**
  * @brief Main adapter for routing network events to local resource logic.
  * * Reference: C-Agent Network Architecture, Two-Phase Locking Pattern.
- * This function acts as the bridge between the asynchronous network layer (epoll) 
- * and the synchronous business logic (Juani's node structures). It parses incoming 
- * buffers, executes the corresponding state updates, handles node disconnections 
+ * This function acts as the bridge between the asynchronous network layer (epoll)
+ * and the synchronous business logic (Juani's node structures). It parses incoming
+ * buffers, executes the corresponding state updates, handles node disconnections
  * by resolving affected jobs, and populates the outbox with response messages.
- * It strictly uses a Two-Phase Locking approach to avoid deadlocks between the 
+ * It strictly uses a Two-Phase Locking approach to avoid deadlocks between the
  * network routing table and the local resource mutex.
  * * @param ctx Pointer to the global ServerContext structure.
  * * @param NODE The local node data structure containing resource states.
@@ -59,8 +59,8 @@ void resource_adapter_patch(ServerContext* ctx, node_data_t NODE, char * SENDER_
 /**
  * @brief Parses a RESERVE or RELEASE protocol command.
  * * Reference: C-Agent Protocol Definitions.
- * Extracts the job ID, resource type, and quantity from a string formatted 
- * as "COMMAND <job_id> <resource> <quantity>". Maps the resource string 
+ * Extracts the job ID, resource type, and quantity from a string formatted
+ * as "COMMAND <job_id> <resource> <quantity>". Maps the resource string
  * ("cpu", "gpu", "mem") to the internal resource_t enum.
  * * @param buffer The raw string payload containing the command.
  * * @param job_id Pointer to store the extracted job identifier.
@@ -73,8 +73,8 @@ int parse_reserve_release(const char* buffer, unsigned* job_id, resource_t* type
 /**
  * @brief Parses an ANNOUNCE UDP datagram.
  * * Reference: C-Agent UDP Discovery Protocol.
- * Extracts the listening port and available local resources of a newly 
- * discovered peer from a string formatted as 
+ * Extracts the listening port and available local resources of a newly
+ * discovered peer from a string formatted as
  * "ANNOUNCE <port> cpu:<x> mem:<y> gpu:<z>".
  * * @param buffer The raw UDP datagram payload.
  * * @param port Pointer to store the node's TCP listening port.
@@ -88,8 +88,8 @@ int parse_announce(const char* buffer, unsigned* port, unsigned* cpu, unsigned* 
 /**
  * @brief Parses a complex JOB_REQUEST containing multiple node petitions.
  * * Reference: Erlang-C Agent Communication Protocol.
- * Iterates over a command string to extract the master job ID and an arbitrary 
- * number of individual resource petitions separated by the '@' character. 
+ * Iterates over a command string to extract the master job ID and an arbitrary
+ * number of individual resource petitions separated by the '@' character.
  * The expected format is "JOB_REQUEST <job_id> @ip:port:res:amount ...".
  * * @param buffer The raw string payload from Erlang.
  * * @param job_id Pointer to store the master job identifier.
@@ -103,7 +103,7 @@ int parse_job_request(const char* buffer, unsigned* job_id, parsed_petition_t* p
 /**
  * @brief Parses single-argument commands consisting only of an ID.
  * * Reference: C-Agent Protocol Definitions.
- * Extracts the job ID for lightweight state-change commands like 
+ * Extracts the job ID for lightweight state-change commands like
  * GRANTED, DENIED, or JOB_RELEASE (e.g., "GRANTED 1234").
  * * @param buffer The raw string payload containing the command.
  * * @param job_id Pointer to store the extracted job identifier.
@@ -114,8 +114,8 @@ int parse_single_id_cmd(const char* buffer, unsigned* job_id);
 /**
  * @brief Registers a newly parsed job into the local network routing table.
  * * Reference: pthread_rwlock_wrlock.
- * Safely inserts an array of parsed petitions into the active_jobs_registry 
- * using a write-lock. This table is later used to perform atomic loopbacks 
+ * Safely inserts an array of parsed petitions into the active_jobs_registry
+ * using a write-lock. This table is later used to perform atomic loopbacks
  * and mass-release broadcasts when a participating node disconnects or dies.
  * * @param job_id The unique identifier of the job being registered.
  * * @param petitions The array of parsed petitions detailing participating nodes.

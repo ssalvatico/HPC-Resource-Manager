@@ -3,6 +3,7 @@
 
 #define MAX_EVENTS 10
 #include "server_types.h"
+#include "../resources/node-structures.h"
 #include <stdint.h>
 #include <pthread.h>
 
@@ -15,7 +16,7 @@ typedef enum {
     ACTION_NONE               // No hacer nada
 } JuaniAction;
 
-#define MAX_OUTBOX 50
+#define MAX_OUTBOX 128
 
 /**
  * @brief Handles the expiration of the TCP startup timer.
@@ -116,6 +117,10 @@ void handle_gc_timer_expiration(ServerContext* ctx);
  */
 void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count);
 
-int find_fd_by_ip_and_port(const char* target_ip, int target_port);
+void resource_adapter_patch(node_data_t NODE, char * SENDER_IP, unsigned SOCKET, const char * BUFFER, out_msg_t * outbox, int * outbox_count, JuaniAction action);
+
+int find_fd_by_ip_port(const char* target_ip, unsigned target_port);
+
+unsigned get_connection_port(int fd);
 
 #endif
