@@ -9,9 +9,7 @@ node_data_t node_init   (unsigned cpu, unsigned gpu, unsigned ram);
 
 void        node_dest   (node_data_t node);
 
-unsigned    master_function(node_data_t NODE, char * NODE_IP, unsigned SOCKET, const char * BUFFER, char * OUT, unsigned OUT_SIZE);
-
-void        known_nodes_del_inactive_nodes(node_data_t node);
+void        known_nodes_del_inactive_nodes(node_data_t node, char ** ARR_ID, unsigned * ARR_PORT, unsigned SIZE); //acá
 
 int         chk_job_request (node_data_t NODE, char * OUT, unsigned OUT_SIZE, unsigned *out_socket);
 
@@ -19,8 +17,28 @@ unsigned    get_job_data(node_data_t NODE, unsigned job_id, char * arr_ip[], res
 
 void        get_local_resources(node_data_t NODE, unsigned * cpu_quantity, unsigned * gpu_quantity, unsigned * mem_quantity);
 
-unsigned    get_node_port(node_data_t NODE, const char * ip);
+// given a node. saves announced new node data in known nodes
+void command_announce       (node_data_t NODE, char * ip, unsigned port, unsigned ram, unsigned cpu, unsigned gpu);
 
-void        release_jobs_by_socket(node_data_t NODE, unsigned socket);
+// given a node, returns a parsed buffer with known nodes data
+void command_get_nodes      (node_data_t NODE, char * OUT_BUFFER, unsigned OUT_SIZE);
+
+// given a node and a job request, it saves in node structure all job's petitions
+void command_job_request    (node_data_t NODE, unsigned job_id, char ** ARR_IP, unsigned * ARR_PORTS, resource_t * ARR_TYPE, unsigned * ARR_QUANT, unsigned size);
+
+//
+void command_job_release    (node_data_t NODE, unsigned job_id);
+
+//
+void command_release(node_data_t NODE, char * NODE_IP, unsigned job_id, resource_t resource, unsigned quantity);
+
+//
+void command_denied(node_data_t NODE, unsigned job_id);
+
+//
+void command_granted(node_data_t NODE, unsigned job_id, char * NODE_IP, unsigned NODE_PORT);
+
+//
+void command_reserve(node_data_t NODE, char * NODE_IP, unsigned SOCKET, unsigned job_id, resource_t type, unsigned amount);
 
 #endif
