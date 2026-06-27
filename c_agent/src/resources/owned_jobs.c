@@ -26,6 +26,7 @@ typedef struct {
  */
 typedef struct {
     unsigned job_id;                /**< Unique identifier from Erlang */
+    unsigned owner_socket;
     int grant_notified;             /**< Flag to ensure Erlang is notified only once when completed */
     time_t created_at;              /**< Timestamp for garbage collection (timeouts) */
     
@@ -82,11 +83,12 @@ void delete_owned_jobs(owned_jobs_t jobs) {
 /* JOB CONSTRUCTION (POPULATING FROM ERLANG)                                 */
 /* ========================================================================= */
 
-int add_new_owned_job(owned_jobs_t jobs, unsigned job_id) {
+int add_new_owned_job(owned_jobs_t jobs, unsigned job_id, unsigned owner_socket) {
     elem_owned_job_t * new_job = malloc(sizeof(elem_owned_job_t));
     if (!new_job) return 0;
 
     new_job->job_id = job_id;
+    new_job->owner_socket = owner_socket;
     new_job->grant_notified = 0;
     new_job->created_at = time(NULL);
     new_job->petition_count = 0;
@@ -94,6 +96,12 @@ int add_new_owned_job(owned_jobs_t jobs, unsigned job_id) {
 
     tablahash_insertar(jobs, new_job);
     return 1;
+}
+
+unsigned get_job_owner_socket(owned_jobs_t jobs, unsigned job_id) {
+    elem_owned_job_t dummy = { .job_id = job_id };
+    elem_owned_job_t * job = tablahash_buscar(jobs, &dummy);
+    return job ? job->owner_socket : 0;
 }
 
 int append_petition_to_job(owned_jobs_t jobs, unsigned job_id, const char * ip, unsigned port, resource_t type, unsigned quantity) {

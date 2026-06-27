@@ -32,17 +32,17 @@ int main() {
     printf("\n--> TEST A: Creacion y Peticiones\n");
     
     // Erlang pide el Job 100 que necesita recursos de 3 nodos distintos
-    add_new_owned_job(jobs, 100);
+    add_new_owned_job(jobs, 100, 10);
     int p1 = append_petition_to_job(jobs, 100, "192.168.1.10", 8000, CPU, 2);
     int p2 = append_petition_to_job(jobs, 100, "192.168.1.11", 8001, RAM, 4096);
     int p3 = append_petition_to_job(jobs, 100, "192.168.1.12", 8002, GPU, 1);
     
     // Job 101 que necesita recursos de 2 nodos
-    add_new_owned_job(jobs, 101);
+    add_new_owned_job(jobs, 101, 11);
     append_petition_to_job(jobs, 101, "192.168.1.10", 8000, RAM, 1024); // Mismo nodo que el Job 100
     append_petition_to_job(jobs, 101, "192.168.1.13", 8003, CPU, 4);
 
-    assert_cond(p1 && p2 && p3, "2. Peticiones anexadas correctamente al Job 100");
+    assert_cond(p1 && p2 && p3 && get_job_owner_socket(jobs, 100) == 10, "2. Job 100 creado con owner y peticiones");
 
     /* =========================================================================
        TEST B: EXTRACCION DE RESERVAS (CONSTRUCCION DEL OUTBOX)
@@ -113,14 +113,14 @@ int main() {
        ========================================================================= */
     printf("\n--> TEST F: Desconexion abrupta de un nodo\n");
     
-    add_new_owned_job(jobs, 200);
+    add_new_owned_job(jobs, 200, 20);
     append_petition_to_job(jobs, 200, "192.168.5.5", 5555, CPU, 1);
     
-    add_new_owned_job(jobs, 201);
+    add_new_owned_job(jobs, 201, 21);
     append_petition_to_job(jobs, 201, "192.168.5.5", 5555, RAM, 100);
     append_petition_to_job(jobs, 201, "192.168.1.10", 8000, GPU, 1);
     
-    add_new_owned_job(jobs, 202); // Este no depende del nodo .5.5
+    add_new_owned_job(jobs, 202, 22); // Este no depende del nodo .5.5
     append_petition_to_job(jobs, 202, "192.168.1.10", 8000, RAM, 100);
 
     // El nodo 192.168.5.5 muere. Buscamos a los afectados.

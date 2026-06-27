@@ -56,7 +56,6 @@ static void handle_get_nodes_response(ServerContext *ctx, unsigned socket, out_m
  * @brief Processes the initial JOB_REQUEST from the local Erlang scheduler.
  */
 static void handle_job_request(ServerContext *ctx, unsigned socket, const char *buffer, out_msg_t *outbox, int *count) {
-    socket = socket; // Prevent warning for unused variable
     node_data_t NODE = (node_data_t)ctx->mynode;
     unsigned job_id;
     
@@ -69,7 +68,7 @@ static void handle_job_request(ServerContext *ctx, unsigned socket, const char *
     pthread_mutex_lock(&NODE->lock_owned);
 
     // 1. Register the base Job
-    add_new_owned_job(NODE->owned_jobs, job_id);
+    add_new_owned_job(NODE->owned_jobs, job_id, socket);
     
     // 2. Parse resource petitions
     char *token = strtok(dup, " "); // skip "JOB_REQUEST"
@@ -137,8 +136,9 @@ static void handle_granted(ServerContext *ctx, const char *sender_ip, unsigned s
     if (mark_petition_as_granted(NODE->owned_jobs, job_id, sender_ip, sender_port)) {
         // Job is 100% Complete: Notify Erlang
         char msg[64];
+        unsigned owner_socket = get_job_owner_socket(NODE->owned_jobs, job_id);
         snprintf(msg, sizeof(msg), "JOB_GRANTED %u\n", job_id);
-        add_to_outbox(outbox, count, msg, ctx->erlang_tcp_fd, NULL, 0);
+        add_to_outbox(outbox, count, msg, owner_socket, NULL, 0);
     } else {
         // Job incomplete: Dispatch the next RESERVE in the queue
         char *ip_next; unsigned port_next, cant_next; resource_t type_next;
@@ -168,6 +168,7 @@ static void handle_denied(ServerContext *ctx, const char *buffer, out_msg_t *out
     char *ips[MAX_JOB_RESOURCES]; unsigned ports[MAX_JOB_RESOURCES], cants[MAX_JOB_RESOURCES];
     resource_t types[MAX_JOB_RESOURCES];
     unsigned n = get_granted_resources(NODE->owned_jobs, job_id, ips, ports, types, cants, MAX_JOB_RESOURCES);
+    unsigned owner_socket = get_job_owner_socket(NODE->owned_jobs, job_id);
     
     // 2. Dispatch RELEASE to all surviving nodes
     for(unsigned i = 0; i < n; i++) {
@@ -179,7 +180,7 @@ static void handle_denied(ServerContext *ctx, const char *buffer, out_msg_t *out
     // 3. Notify Erlang of total failure and clean up memory
     char msg_deny[64];
     snprintf(msg_deny, sizeof(msg_deny), "JOB_DENIED %u\n", job_id);
-    add_to_outbox(outbox, count, msg_deny, ctx->erlang_tcp_fd, NULL, 0);
+    add_to_outbox(outbox, count, msg_deny, owner_socket, NULL, 0);
     remove_owned_job(NODE->owned_jobs, job_id);
 
     pthread_mutex_unlock(&NODE->lock_owned);
@@ -257,11 +258,8 @@ static void handle_check_deadnodes(ServerContext *ctx, out_msg_t *outbox, int *c
     unsigned dead_count = remove_inactive_nodes(NODE->known_nodes, dead_ips, dead_ports, 10);
     pthread_mutex_unlock(&NODE->lock_known);
 
-    if(dead_count == 0)return;
-
-    pthread_mutex_lock(&NODE->lock_owned);
-
     for (unsigned i = 0; i < dead_count; i++) {
+        pthread_mutex_lock(&NODE->lock_owned);
         unsigned affected_jobs[20];
         unsigned affected_count = get_jobs_affected_by_dead_node(NODE->owned_jobs, dead_ips[i], dead_ports[i], affected_jobs, 20);
         
@@ -272,6 +270,7 @@ static void handle_check_deadnodes(ServerContext *ctx, out_msg_t *outbox, int *c
             char *ips[MAX_JOB_RESOURCES]; unsigned ports[MAX_JOB_RESOURCES], cants[MAX_JOB_RESOURCES];
             resource_t types[MAX_JOB_RESOURCES];
             unsigned granted = get_granted_resources(NODE->owned_jobs, job_id, ips, ports, types, cants, MAX_JOB_RESOURCES);
+            unsigned owner_socket = get_job_owner_socket(NODE->owned_jobs, job_id);
             
             for(unsigned k=0; k<granted; k++) {
                 char msg[128];
@@ -281,7 +280,7 @@ static void handle_check_deadnodes(ServerContext *ctx, out_msg_t *outbox, int *c
             
             char msg_deny[64];
             snprintf(msg_deny, sizeof(msg_deny), "JOB_DENIED %u\n", job_id);
-            add_to_outbox(outbox, count, msg_deny, ctx->erlang_tcp_fd, NULL, 0);
+            add_to_outbox(outbox, count, msg_deny, owner_socket, NULL, 0);
             
             remove_owned_job(NODE->owned_jobs, job_id);
         }
@@ -289,6 +288,30 @@ static void handle_check_deadnodes(ServerContext *ctx, out_msg_t *outbox, int *c
 
         pthread_mutex_unlock(&NODE->lock_owned);
     }
+
+    unsigned timed_out_jobs[20];
+    pthread_mutex_lock(&NODE->lock_owned);
+    unsigned timeout_count = collect_timed_out_jobs(NODE->owned_jobs, timed_out_jobs, 20);
+
+    for (unsigned i = 0; i < timeout_count; i++) {
+        unsigned job_id = timed_out_jobs[i];
+        char *ips[MAX_JOB_RESOURCES]; unsigned ports[MAX_JOB_RESOURCES], cants[MAX_JOB_RESOURCES];
+        resource_t types[MAX_JOB_RESOURCES];
+        unsigned granted = get_granted_resources(NODE->owned_jobs, job_id, ips, ports, types, cants, MAX_JOB_RESOURCES);
+        unsigned owner_socket = get_job_owner_socket(NODE->owned_jobs, job_id);
+
+        for (unsigned j = 0; j < granted; j++) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "RELEASE %u %s %u\n", job_id, (types[j]==CPU)?"cpu":(types[j]==RAM)?"mem":"gpu", cants[j]);
+            add_to_outbox(outbox, count, msg, -1, ips[j], ports[j]);
+        }
+
+        char msg_timeout[64];
+        snprintf(msg_timeout, sizeof(msg_timeout), "JOB_TIMEOUT %u\n", job_id);
+        add_to_outbox(outbox, count, msg_timeout, owner_socket, NULL, 0);
+        remove_owned_job(NODE->owned_jobs, job_id);
+    }
+    pthread_mutex_unlock(&NODE->lock_owned);
 }
 
 /**
@@ -414,6 +437,7 @@ void resource_adapter_patch(ServerContext *ctx, char *SENDER_IP, unsigned SOCKET
                     char *ips[MAX_JOB_RESOURCES]; unsigned ports[MAX_JOB_RESOURCES], cants[MAX_JOB_RESOURCES];
                     resource_t types[MAX_JOB_RESOURCES];
                     unsigned granted = get_granted_resources(NODE->owned_jobs, job_id, ips, ports, types, cants, MAX_JOB_RESOURCES);
+                    unsigned owner_socket = get_job_owner_socket(NODE->owned_jobs, job_id);
                     
                     for(unsigned k = 0; k < granted; k++) {
                         char msg[128];
@@ -423,7 +447,7 @@ void resource_adapter_patch(ServerContext *ctx, char *SENDER_IP, unsigned SOCKET
                     
                     char msg_deny[64];
                     snprintf(msg_deny, sizeof(msg_deny), "JOB_DENIED %u\n", job_id);
-                    add_to_outbox(outbox, outbox_count, msg_deny, ctx->erlang_tcp_fd, NULL, 0);
+                    add_to_outbox(outbox, outbox_count, msg_deny, owner_socket, NULL, 0);
                     
                     remove_owned_job(NODE->owned_jobs, job_id);
                 }
