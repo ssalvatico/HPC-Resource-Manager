@@ -1,8 +1,7 @@
 EBIN = ebin
 
-HOST=127.0.0.1
-PORT=8001
-ENV=DEV
+PORT?=8001
+ENV?=DEV
 
 MODULES = \
 	erlang_c_bridge \
@@ -19,12 +18,12 @@ $(EBIN)/%.beam: %.erl header.hrl
 
 
 run: build
-	HOST=$(HOST) PORT=$(PORT) \
+	PORT=$(PORT) \
 	erl -pa $(EBIN) -noshell \
 		-eval "erlang_c_bridge:init(), timer:sleep(infinity)"
 
 run_test: build
-	HOST=$(HOST) PORT=$(PORT) \
+	PORT=$(PORT) \
 	ENV=TEST \
 	erl -pa $(EBIN) -noshell \
 		-eval "erlang_c_bridge:init(), timer:sleep(infinity)"

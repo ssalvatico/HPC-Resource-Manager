@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "../../include/comms/server_init.h"
 #include "../../include/comms/sys_sockets.h"
 #include "../../include/comms/sys_epoll.h"
@@ -29,13 +30,13 @@ void init_server(ServerContext* ctx, int argc, char *argv[]) {
     ctx->udp_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
     struct itimerspec its_udp = {0};
     its_udp.it_value.tv_sec = 1; // 1 seconds first shot
-    its_udp.it_interval.tv_sec = 1;
+    its_udp.it_interval.tv_sec = 5;
 
     //garbage collector
     ctx->gc_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
     struct itimerspec its_gc = {0};
-    its_gc.it_value.tv_sec = 5;    // Primer disparo en 5 segundos
-    its_gc.it_interval.tv_sec = 5;
+    its_gc.it_value.tv_sec = 1;    // Primer disparo en 5 segundos
+    its_gc.it_interval.tv_sec = 1;
 
     timerfd_settime(ctx->tcp_timerfd, 0, &its_tcp, NULL);
     timerfd_settime(ctx->udp_timerfd, 0, &its_udp, NULL);
