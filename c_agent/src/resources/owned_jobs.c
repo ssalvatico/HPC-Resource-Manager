@@ -128,14 +128,23 @@ int append_petition_to_job(owned_jobs_t jobs, unsigned job_id, const char * ip, 
 /* NETWORK STATE UPDATES (HANDLING REMOTE RESPONSES)                         */
 /* ========================================================================= */
 
-int mark_petition_as_granted(owned_jobs_t jobs, unsigned job_id, const char * ip, unsigned port) {
+int current_petition_matches(owned_jobs_t jobs, unsigned job_id, const char * ip, unsigned port) {
     elem_owned_job_t dummy = { .job_id = job_id };
     elem_owned_job_t * job = tablahash_buscar(jobs, &dummy);
-    if (!job || job->next_reserve_idx == 0) return -1;
+    if (!job || job->next_reserve_idx == 0) return 0;
 
     unsigned idx = job->next_reserve_idx - 1;
-    if (job->petitions[idx].port != port || strcmp(job->petitions[idx].ip, ip) != 0) return -1;
-    if (job->petitions[idx].is_granted) return -1;
+    return !job->petitions[idx].is_granted &&
+           job->petitions[idx].port == port &&
+           strcmp(job->petitions[idx].ip, ip) == 0;
+}
+
+int mark_petition_as_granted(owned_jobs_t jobs, unsigned job_id, const char * ip, unsigned port) {
+    if (!current_petition_matches(jobs, job_id, ip, port)) return -1;
+
+    elem_owned_job_t dummy = { .job_id = job_id };
+    elem_owned_job_t * job = tablahash_buscar(jobs, &dummy);
+    unsigned idx = job->next_reserve_idx - 1;
 
     job->petitions[idx].is_granted = 1;
 

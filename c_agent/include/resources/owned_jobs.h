@@ -77,6 +77,7 @@ int append_petition_to_job(owned_jobs_t jobs, unsigned job_id, const char * ip, 
  * @return 1 if the job is complete, 0 if it remains pending, -1 if the response does not match.
  */
 int mark_petition_as_granted(owned_jobs_t jobs, unsigned job_id, const char * ip, unsigned port);
+int current_petition_matches(owned_jobs_t jobs, unsigned job_id, const char * ip, unsigned port);
 
 
 /* ========================================================================= */

@@ -104,13 +104,17 @@ int main() {
     resource_adapter_patch(&ctx, "192.168.1.10", 10, "GRANTED 200", outbox, &count, ACTION_RESPOND);
     
     // Nodo 2 RECHAZA (DENIED)
+    mock_ports[13] = 8013;
+    resource_adapter_patch(&ctx, "192.168.1.13", 13, "DENIED 200", outbox, &count, ACTION_RESPOND);
+    assert_cond(count == 0, "C1. Se ignoro un DENIED de un nodo incorrecto");
+
     mock_ports[12] = 8012;
     resource_adapter_patch(&ctx, "192.168.1.12", 12, "DENIED 200", outbox, &count, ACTION_RESPOND);
     
     debug_outbox(outbox, count);
-    assert_cond(count == 2, "C1. Genero 2 mensajes (Rollback + Notificacion a Erlang)");
-    assert_cond(strstr(outbox[0].message, "RELEASE 200 cpu 1"), "C2. Se genero el RELEASE para el nodo que habia dicho que si");
-    assert_cond(strcmp(outbox[1].message, "JOB_DENIED 200\n") == 0 && outbox[1].target_fd == 99, "C3. Se informo JOB_DENIED a Erlang");
+    assert_cond(count == 2, "C2. Genero 2 mensajes (Rollback + Notificacion a Erlang)");
+    assert_cond(strstr(outbox[0].message, "RELEASE 200 cpu 1"), "C3. Se genero el RELEASE para el nodo que habia dicho que si");
+    assert_cond(strcmp(outbox[1].message, "JOB_DENIED 200\n") == 0 && outbox[1].target_fd == 99, "C4. Se informo JOB_DENIED a Erlang");
 
     /* -------------------------------------------------------------------------
        TEST D: EL FALLO SILENCIOSO TCP (Desconexión Instantánea)
@@ -141,20 +145,32 @@ int main() {
     resource_adapter_patch(&ctx, "192.168.1.20", 20, "RESERVE 400 cpu 3", outbox, &count, ACTION_RESPOND);
     assert_cond(count == 1 && strstr(outbox[0].message, "GRANTED 400"), "E1. Se presto 3 CPUs al Nodo A inmediatamente");
 
+    resource_adapter_patch(&ctx, "192.168.1.20", 20, "RESERVE 400 cpu 3", outbox, &count, ACTION_RESPOND);
+    assert_cond(count == 1 && strstr(outbox[0].message, "GRANTED 400"), "E2. Un RESERVE duplicado fue idempotente");
+
     // Nodo B (FD 21) pide 2 CPUs (Solo nos queda 1, asi que va a la COLA)
     mock_ports[21] = 0;
     resource_adapter_patch(&ctx, "192.168.1.21", 21, "RESERVE 401 cpu 2", outbox, &count, ACTION_RESPOND);
-    assert_cond(count == 0, "E2. No se envia respuesta al Nodo B (quedo encolado esperando recursos)");
+    assert_cond(count == 0, "E3. No se envia respuesta al Nodo B (quedo encolado esperando recursos)");
+
+    resource_adapter_patch(&ctx, "192.168.1.20", 20, "RELEASE 400 cpu 2", outbox, &count, ACTION_RESPOND);
+    assert_cond(count == 0, "E4. Un RELEASE con cantidad incorrecta fue ignorado");
 
     // Nodo A devuelve las 3 CPUs que tenia
     resource_adapter_patch(&ctx, "192.168.1.20", 20, "RELEASE 400 cpu 3", outbox, &count, ACTION_RESPOND);
     
     debug_outbox(outbox, count);
-    assert_cond(count == 1 && strstr(outbox[0].message, "GRANTED 401"), "E3. Al liberar recursos, se desbloqueo al Nodo B de la cola automaticamente");
-    assert_cond(outbox[0].target_fd == 21, "E4. El GRANTED se envio al FD del Nodo B");
+    assert_cond(count == 1 && strstr(outbox[0].message, "GRANTED 401"), "E5. Al liberar recursos, se desbloqueo al Nodo B de la cola automaticamente");
+    assert_cond(outbox[0].target_fd == 21, "E6. El GRANTED se envio al FD del Nodo B");
 
     resource_adapter_patch(&ctx, "192.168.1.22", 22, "RESERVE 402 cpu 5", outbox, &count, ACTION_RESPOND);
-    assert_cond(count == 1 && strcmp(outbox[0].message, "DENIED 402\n") == 0 && outbox[0].target_fd == 22, "E5. Una reserva imposible recibe DENIED");
+    assert_cond(count == 1 && strcmp(outbox[0].message, "DENIED 402\n") == 0 && outbox[0].target_fd == 22, "E7. Una reserva imposible recibe DENIED");
+
+    resource_adapter_patch(&ctx, "192.168.1.22", 22, "RESERVE 403 disk 1", outbox, &count, ACTION_RESPOND);
+    assert_cond(count == 0, "E8. Un recurso desconocido fue ignorado");
+
+    resource_adapter_patch(&ctx, "192.168.1.22", 22, "RESERVE 404 cpu 1 garbage", outbox, &count, ACTION_RESPOND);
+    assert_cond(count == 0, "E9. Un mensaje con contenido extra fue ignorado");
 
     /* -------------------------------------------------------------------------
        TEST F: LIMPIEZA TOTAL DE MEMORIA

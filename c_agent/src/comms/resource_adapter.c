@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
 
 
 /* ========================================================================= */
@@ -34,6 +35,59 @@ static void add_to_outbox(out_msg_t *outbox, int *count, const char *msg, int ta
     }
 
     (*count)++;
+}
+
+static int valid_end(const char *buffer, int offset) {
+    while (buffer[offset] != '\0' && isspace((unsigned char)buffer[offset])) offset++;
+    return buffer[offset] == '\0';
+}
+
+static int parse_resource(const char *name, resource_t *type) {
+    if (strcmp(name, "cpu") == 0) {
+        *type = CPU;
+        return 1;
+    }
+    if (strcmp(name, "mem") == 0) {
+        *type = RAM;
+        return 1;
+    }
+    if (strcmp(name, "gpu") == 0) {
+        *type = GPU;
+        return 1;
+    }
+    return 0;
+}
+
+static int parse_reserve(const char *buffer, unsigned *job_id, resource_t *type, unsigned *quantity) {
+    char resource[10];
+    int offset = 0;
+    if (sscanf(buffer, "RESERVE %u %9s %u %n", job_id, resource, quantity, &offset) != 3) return 0;
+    return *quantity > 0 && parse_resource(resource, type) && valid_end(buffer, offset);
+}
+
+static int parse_release(const char *buffer, unsigned *job_id, resource_t *type, unsigned *quantity) {
+    char resource[10];
+    int offset = 0;
+    if (sscanf(buffer, "RELEASE %u %9s %u %n", job_id, resource, quantity, &offset) != 3) return 0;
+    return *quantity > 0 && parse_resource(resource, type) && valid_end(buffer, offset);
+}
+
+static int parse_granted(const char *buffer, unsigned *job_id) {
+    int offset = 0;
+    return sscanf(buffer, "GRANTED %u %n", job_id, &offset) == 1 && valid_end(buffer, offset);
+}
+
+static int parse_denied(const char *buffer, unsigned *job_id) {
+    int offset = 0;
+    return sscanf(buffer, "DENIED %u %n", job_id, &offset) == 1 && valid_end(buffer, offset);
+}
+
+static int command_only(const char *buffer, const char *expected) {
+    char command[16];
+    int offset = 0;
+    return sscanf(buffer, "%15s %n", command, &offset) == 1 &&
+           strcmp(command, expected) == 0 &&
+           valid_end(buffer, offset);
 }
 
 
@@ -100,10 +154,10 @@ static void handle_job_request(ServerContext *ctx, unsigned socket, const char *
  */
 static void handle_reserve(ServerContext *ctx, unsigned socket, const char *buffer, out_msg_t *outbox, int *count) {
     node_data_t NODE = (node_data_t)ctx->mynode;
-    unsigned job_id, cant; char res[10];
+    unsigned job_id, cant;
+    resource_t type;
     
-    if (sscanf(buffer, "RESERVE %u %9s %u", &job_id, res, &cant) != 3) return;
-    resource_t type = (strcmp(res, "cpu") == 0) ? CPU : (strcmp(res, "mem") == 0) ? RAM : GPU;
+    if (!parse_reserve(buffer, &job_id, &type, &cant)) return;
     
     pthread_mutex_lock(&NODE->lock_local);
 
@@ -126,12 +180,11 @@ static void handle_reserve(ServerContext *ctx, unsigned socket, const char *buff
  * @brief Processes GRANTED messages from remote nodes. 
  * Marks the petition as done and either notifies Erlang or triggers the next RESERVE.
  */
-static void handle_granted(ServerContext *ctx, const char *sender_ip, unsigned sender_port, unsigned socket, const char *buffer, out_msg_t *outbox, int *count) {
-    socket = socket; // Prevent warning for unused variable
+static void handle_granted(ServerContext *ctx, const char *sender_ip, unsigned sender_port, const char *buffer, out_msg_t *outbox, int *count) {
     node_data_t NODE = (node_data_t)ctx->mynode;
     unsigned job_id;
     
-    if (sscanf(buffer, "GRANTED %u", &job_id) != 1) return;
+    if (!parse_granted(buffer, &job_id)) return;
     if (sender_port == 0) return; // Prevent matching against invalid port
     
     pthread_mutex_lock(&NODE->lock_owned);
@@ -161,13 +214,17 @@ static void handle_granted(ServerContext *ctx, const char *sender_ip, unsigned s
  * @brief Processes DENIED messages. Performs a rollback by releasing all previously 
  * granted resources on other nodes and notifying Erlang of the failure.
  */
-static void handle_denied(ServerContext *ctx, const char *buffer, out_msg_t *outbox, int *count) {
+static void handle_denied(ServerContext *ctx, const char *sender_ip, unsigned sender_port, const char *buffer, out_msg_t *outbox, int *count) {
     node_data_t NODE = (node_data_t)ctx->mynode;
     unsigned job_id;
     
-    if (sscanf(buffer, "DENIED %u", &job_id) != 1) return;
+    if (!parse_denied(buffer, &job_id) || sender_port == 0) return;
 
     pthread_mutex_lock(&NODE->lock_owned);
+    if (!current_petition_matches(NODE->owned_jobs, job_id, sender_ip, sender_port)) {
+        pthread_mutex_unlock(&NODE->lock_owned);
+        return;
+    }
     
     // 1. Extract successfully granted resources for rollback
     char *ips[MAX_JOB_RESOURCES]; unsigned ports[MAX_JOB_RESOURCES], cants[MAX_JOB_RESOURCES];
@@ -197,14 +254,17 @@ static void handle_denied(ServerContext *ctx, const char *buffer, out_msg_t *out
  */
 static void handle_release(ServerContext *ctx, unsigned socket, const char *buffer, out_msg_t *outbox, int *count) {
     node_data_t NODE = (node_data_t)ctx->mynode;
-    unsigned job_id, cant; char res[10];
+    unsigned job_id, cant;
+    resource_t type;
     
-    if (sscanf(buffer, "RELEASE %u %9s %u", &job_id, res, &cant) != 3) return;
+    if (!parse_release(buffer, &job_id, &type, &cant)) return;
 
     pthread_mutex_lock(&NODE->lock_local);
     
-    // 1. Reclaim local resources
-    del_active_job(NODE->resources, NODE->active_jobs, job_id, socket);
+    if (!release_job_request(NODE->resources, NODE->active_jobs, job_id, socket, cant, type)) {
+        pthread_mutex_unlock(&NODE->lock_local);
+        return;
+    }
     
     // 2. Wake up queued requests if resources are now available
     char msg[64];
@@ -466,13 +526,16 @@ void resource_adapter_patch(ServerContext *ctx, char *SENDER_IP, unsigned SOCKET
         case ACTION_RESPOND:
             if (BUFFER == NULL) break;
             
-            if      (strncmp(BUFFER, "GET_NODES", 9)    == 0) handle_get_nodes_response(ctx, SOCKET, outbox, outbox_count);
-            else if (strncmp(BUFFER, "JOB_REQUEST", 11) == 0) handle_job_request(ctx, SOCKET, BUFFER, outbox, outbox_count);
-            else if (strncmp(BUFFER, "RESERVE", 7)      == 0) handle_reserve(ctx, SOCKET, BUFFER, outbox, outbox_count);
-            else if (strncmp(BUFFER, "GRANTED", 7)      == 0) handle_granted(ctx, SENDER_IP, get_connection_port(SOCKET), SOCKET, BUFFER, outbox, outbox_count);
-            else if (strncmp(BUFFER, "DENIED", 6)       == 0) handle_denied(ctx, BUFFER, outbox, outbox_count);
-            else if (strncmp(BUFFER, "RELEASE", 7)      == 0) handle_release(ctx, SOCKET, BUFFER, outbox, outbox_count);
-            else if (strncmp(BUFFER, "JOB_RELEASE", 11) == 0) handle_job_release(ctx, BUFFER, outbox, outbox_count);
+            char command[16];
+            if (sscanf(BUFFER, "%15s", command) != 1) break;
+
+            if      (strcmp(command, "GET_NODES")   == 0 && command_only(BUFFER, "GET_NODES")) handle_get_nodes_response(ctx, SOCKET, outbox, outbox_count);
+            else if (strcmp(command, "JOB_REQUEST") == 0) handle_job_request(ctx, SOCKET, BUFFER, outbox, outbox_count);
+            else if (strcmp(command, "RESERVE")     == 0) handle_reserve(ctx, SOCKET, BUFFER, outbox, outbox_count);
+            else if (strcmp(command, "GRANTED")     == 0) handle_granted(ctx, SENDER_IP, get_connection_port(SOCKET), BUFFER, outbox, outbox_count);
+            else if (strcmp(command, "DENIED")      == 0) handle_denied(ctx, SENDER_IP, get_connection_port(SOCKET), BUFFER, outbox, outbox_count);
+            else if (strcmp(command, "RELEASE")     == 0) handle_release(ctx, SOCKET, BUFFER, outbox, outbox_count);
+            else if (strcmp(command, "JOB_RELEASE") == 0) handle_job_release(ctx, BUFFER, outbox, outbox_count);
             break;
             
         default:

@@ -22,12 +22,21 @@ typedef struct {
     void* mynode;
 } ServerContext;
 
+typedef enum {
+    CONNECTION_UNKNOWN,
+    CONNECTION_ERLANG,
+    CONNECTION_AGENT
+} ConnectionKind;
+
 typedef struct {
     int is_active;                      
     char ip[16];                        
     unsigned port;
+    ConnectionKind kind;
     char pending_message[BUFFER_SIZE];
-    unsigned job_id;
+    char receive_buffer[BUFFER_SIZE];
+    unsigned receive_length;
+    int discarding_line;
 } ConnectionState;
 
 typedef struct {

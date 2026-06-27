@@ -159,6 +159,26 @@ void delete_local_resource(local_resources_t * resources){
 /* RESERVATIONS & WAITING QUEUE LOGIC                                        */
 /* ========================================================================= */
 
+static int existing_request_state(local_resources_t *resources, active_jobs_t active_jobs, unsigned id, unsigned socket, unsigned quantity, resource_t type) {
+    elem_active_job_t * dummy = create_elem_active_job(id, socket, 0, type);
+    if (dummy == NULL) return -1;
+
+    elem_active_job_t * active = tablahash_buscar(active_jobs, dummy);
+    dest_active_job(dummy);
+    if (active != NULL) return active->resource_quantity == quantity ? 1 : -1;
+
+    queue_t act = resources->request_queue[type];
+    while (!queue_empty(act)) {
+        elem_job_request_t * pending = act->data;
+        if (pending->job_id == id && pending->socket == socket && pending->resource_type == type) {
+            return pending->resource_quantity == quantity ? 2 : -1;
+        }
+        act = act->next;
+    }
+
+    return 0;
+}
+
 /**
  * [INTEGRATION]
  * Where to call: Inside the Patcher (resource_adapter.c) when parsing a CMD_RESERVE.
@@ -168,6 +188,10 @@ void delete_local_resource(local_resources_t * resources){
  * If result == 0  -> Do nothing (it is queued).
  */
 int new_job_request (local_resources_t * resources, active_jobs_t active_jobs, unsigned id, unsigned socket, unsigned quantity, resource_t type){
+    int existing = existing_request_state(resources, active_jobs, id, socket, quantity, type);
+    if (existing == 1) return 1;
+    if (existing == 2) return 0;
+    if (existing == -1) return -1;
     
     // 1. HARD REJECT: Request exceeds the maximum physical capacity of the machine.
     if (quantity > resources->total[type]) {
@@ -297,6 +321,42 @@ void del_pending_job_requests(local_resources_t * resources, unsigned job_id, un
             }
         }
     }
+}
+
+int release_job_request(local_resources_t * resources, active_jobs_t jobs, unsigned job_id, unsigned socket, unsigned quantity, resource_t type) {
+    elem_active_job_t * dummy = create_elem_active_job(job_id, socket, 0, type);
+    if (dummy == NULL) return 0;
+
+    elem_active_job_t * active = tablahash_buscar(jobs, dummy);
+    if (active != NULL) {
+        if (active->resource_quantity != quantity) {
+            dest_active_job(dummy);
+            return 0;
+        }
+
+        resources->avail[type] += active->resource_quantity;
+        tablahash_eliminar(jobs, dummy);
+        dest_active_job(dummy);
+        return 1;
+    }
+    dest_active_job(dummy);
+
+    queue_t act = resources->request_queue[type];
+    while (!queue_empty(act)) {
+        elem_job_request_t * pending = act->data;
+        if (pending->job_id == job_id && pending->socket == socket && pending->resource_quantity == quantity) {
+            resources->request_queue[type] = queue_delete(
+                resources->request_queue[type],
+                pending,
+                (FuncionDestructora)dest_job_request,
+                (FuncionComparadora)comp_job_request
+            );
+            return 1;
+        }
+        act = act->next;
+    }
+
+    return 0;
 }
 
 // Visitor function used internally by free_all_resources_from_socket to scan the hash table
