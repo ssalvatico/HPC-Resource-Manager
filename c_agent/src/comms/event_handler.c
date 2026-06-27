@@ -86,7 +86,7 @@ void handle_incoming_discovery(ServerContext* ctx) {
     char sender_ip[16];
     
     if (process_discovery_datagram(ctx->udp_fd, buffer, BUFFER_SIZE, sender_ip) == 0) {
-        printf("[UDP] Received from %s: %s", sender_ip, buffer);
+        printf("[UDP %d] Received from %s: %s", ctx->udp_fd, sender_ip, buffer);
         // con esto le digo a juani que hay un nuevo nodo descubierto y en buffer le paso 
         // el announce del emisor y la ip en sender ip
         out_msg_t dummy_outbox[1]; 

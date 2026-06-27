@@ -31,7 +31,7 @@ init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
 
     dump_state ->
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "dump_state", maps:without([sender_pid, receiver_pid], State)),
-      io:fwrite("[Erlang][STATE] ~s~n", [format_state(State)]),
+      io:fwrite("[Erlang][STATE]~s~n", [format_state(State)]),
       init(State, NRequests, Test);
 
     {packet_received, Packet} ->
@@ -125,15 +125,21 @@ handle_packet(<<"NODES ", Rest/binary>>) ->
     case NodeList of
     [] -> {skip, "No nodes available"};
     _ ->
-      NodeRecordList = lists:map(fun get_node/1, NodeList),
+      NodeRecordList = lists:filter(fun(N) -> N =/= invalid end, lists:map(fun get_node/1, NodeList)),
       {node_records, NodeRecordList}
     end;
 handle_packet(<<"JOB_GRANTED ", Rest/binary>>) ->
-    {job_granted, list_to_integer(string:trim(binary_to_list(Rest)))};
+    try {job_granted, list_to_integer(string:trim(binary_to_list(Rest)))}
+    catch _:_ -> {skip, "malformed JOB_GRANTED"}
+    end;
 handle_packet(<<"JOB_DENIED ", Rest/binary>>) ->
-    {job_denied, list_to_integer(string:trim(binary_to_list(Rest)))};
+    try {job_denied, list_to_integer(string:trim(binary_to_list(Rest)))}
+    catch _:_ -> {skip, "malformed JOB_DENIED"}
+    end;
 handle_packet(<<"JOB_TIMEOUT ", Rest/binary>>) ->
-    {job_timeout, list_to_integer(string:trim(binary_to_list(Rest)))};
+    try {job_timeout, list_to_integer(string:trim(binary_to_list(Rest)))}
+    catch _:_ -> {skip, "malformed JOB_TIMEOUT"}
+    end;
 handle_packet(_) ->
     {skip, "Unknown packet"}.
 
@@ -156,16 +162,19 @@ get_node_list(Packet) ->
 %%% Parses a single node string into a #node{} record.
 %%% Format: "ip:port:cpu:N:mem:N:gpu:N"
 get_node(Node) ->
-    [Ip, Port | Resources] = string:split(Node, ":", all),
-    % [{"cpu", 4}, {"gpu", 10}]
-    ResourcePairs = to_pairs(Resources),
-    lists:foldl(fun assign_resource/2 ,#node{ip = Ip, port = Port} ,ResourcePairs).
-
+    case string:split(Node, ":", all) of
+        [Ip, Port | Resources] when length(Resources) >= 2 ->
+            ResourcePairs = to_pairs(Resources),
+            lists:foldl(fun assign_resource/2, #node{ip = Ip, port = Port}, ResourcePairs);
+        _ ->
+            invalid
+    end.
 
 %%% Converts a flat list of alternating keys and values into tuples.
 %%% Example: ["cpu", "4", "gpu", "1"] -> [{"cpu", 4}, {"gpu", 1}]
 to_pairs([Key, Value | Rest]) ->
     [{Key, list_to_integer(string:trim(Value))} | to_pairs(Rest)];
+to_pairs([_]) -> [];
 to_pairs([]) ->
     [].
 
@@ -286,8 +295,8 @@ pick_resources(SelectedNode) ->
 %%% Format: " @Ip:Port:ResourceName:Amount"
 % i.e JOB REQUEST 1001 @192.168.1.2:8000:cpu:2 @192.168.1.3:8001:gpu:1
 build_job_request({Ip, Port, Name, Amount}, Acc) ->
-  Acc ++ " @" ++ Ip ++ ":" ++ Port ++ ":" ++ atom_to_list(Name) ++ ":" ++ integer_to_list(Amount).
-
+  PortStr = if is_integer(Port) -> integer_to_list(Port); true -> Port end,
+  Acc ++ " @" ++ Ip ++ ":" ++ PortStr ++ ":" ++ atom_to_list(Name) ++ ":" ++ integer_to_list(Amount).
 
 
 %%% Simulates job execution by sleeping a random amount of time,

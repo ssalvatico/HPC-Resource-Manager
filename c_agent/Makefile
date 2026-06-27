@@ -31,7 +31,7 @@ $(BUILD_DIR)/%.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 run: $(TARGET)
-	./$(TARGET) 127.0.0.1 8000 4 8192 1
+	./$(TARGET) 127.0.0.1 8001 4 3 8192
 
 clean:
 	rm -rf $(BUILD_DIR)

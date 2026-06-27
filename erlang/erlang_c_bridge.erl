@@ -1,6 +1,6 @@
 -module(erlang_c_bridge).
 -include("header.hrl").
--export([init/0, init/3, conn_handler/2, sender/2, receiver/2, connect/3]).
+-export([init/0, init/3, conn_handler/2, sender/2, receiver/2, connect/3, split_messages/1, split_messages/2]).
 
 
 
@@ -37,21 +37,31 @@ conn_handler(Socket, JobSchedulerId) ->
 
 
 
-%%% Listens on Socket for incoming responses from the C agent.
-%%% Forwards each packet to the scheduler. On error, notifies scheduler and terminates.
-%%% Runs indefinitely until a socket error occurs.
 receiver(Socket, JobSchedulerId) ->
     case gen_tcp:recv(Socket, 0, infinity) of
         {ok, Packet} ->
-            event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "PACKET RECEIVED", Packet),
             JobSchedulerId ! {packet_received, Packet},
+            io:format("Packet received~n"),
             receiver(Socket, JobSchedulerId);
+        {error, closed} ->
+            io:format("error, closed~n"),
+            JobSchedulerId ! {error, closed};
         {error, Reason} ->
-            JobSchedulerId ! {error, Reason},
-            event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
-            gen_tcp:close(Socket)
-    end,
-    ok.
+            io:format("Error received with reason ~p~n",[Reason]),
+            JobSchedulerId ! {error, Reason}
+    end.
+
+split_messages(Buffer) ->
+    split_messages(Buffer, []).
+
+split_messages(Buffer, Acc) ->
+    case binary:split(Buffer, <<"\n">>) of
+        [_] -> {lists:reverse(Acc), Buffer};
+        [Msg, Rest] when byte_size(Msg) > 0 ->
+            split_messages(Rest, [Msg | Acc]);
+        [_, Rest] ->
+            split_messages(Rest, Acc)
+    end.
 
 
 
