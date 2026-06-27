@@ -116,33 +116,35 @@ state_tick(SchedulerPid) ->
   state_tick(SchedulerPid).
 
 
-
 %%% Dispatches incoming TCP packets based on their prefix.
 %%% Returns tagged tuples: {node_records, List} | {job_granted, Id} |
 %%%                        {job_denied, Id} | {job_timeout, Id} | {skip, Reason}
-handle_packet(<<"NODES ", Rest/binary>>) ->
+%%% 
+handle_packet(Binary) ->
+  try
+    do_handle_packet(Binary)
+  catch
+    Error:Reason:Stacktrace -> 
+      io:fwrite("Exception catched [~p, ~p, ~p] ~n", [Error, Reason, Stacktrace]),
+      {skip, "Unknown packet"}
+  end.
+
+do_handle_packet(<<"NODES ", Rest/binary>>) ->
     NodeList = get_node_list(Rest),
     case NodeList of
     [] -> {skip, "No nodes available"};
     _ ->
-      NodeRecordList = lists:filter(fun(N) -> N =/= invalid end, lists:map(fun get_node/1, NodeList)),
+      NodeRecordList = lists:map(fun validate_and_get_node/1, NodeList),
       {node_records, NodeRecordList}
     end;
-handle_packet(<<"JOB_GRANTED ", Rest/binary>>) ->
-    try {job_granted, list_to_integer(string:trim(binary_to_list(Rest)))}
-    catch _:_ -> {skip, "malformed JOB_GRANTED"}
-    end;
-handle_packet(<<"JOB_DENIED ", Rest/binary>>) ->
-    try {job_denied, list_to_integer(string:trim(binary_to_list(Rest)))}
-    catch _:_ -> {skip, "malformed JOB_DENIED"}
-    end;
-handle_packet(<<"JOB_TIMEOUT ", Rest/binary>>) ->
-    try {job_timeout, list_to_integer(string:trim(binary_to_list(Rest)))}
-    catch _:_ -> {skip, "malformed JOB_TIMEOUT"}
-    end;
-handle_packet(_) ->
+do_handle_packet(<<"JOB_GRANTED ", Rest/binary>>) ->
+    {job_granted, list_to_integer(string:trim(binary_to_list(Rest)))};
+do_handle_packet(<<"JOB_DENIED ", Rest/binary>>) ->
+    {job_denied, list_to_integer(string:trim(binary_to_list(Rest)))};
+do_handle_packet(<<"JOB_TIMEOUT ", Rest/binary>>) ->
+    {job_timeout, list_to_integer(string:trim(binary_to_list(Rest)))};
+do_handle_packet(_) ->
     {skip, "Unknown packet"}.
-
 
 
 %%% Parses a semicolon-separated binary of nodes into a list of strings.
@@ -155,20 +157,23 @@ get_node_list(Packet) ->
     _ -> string:split(TrimmedString, ";", all)
   end.
 
-
-
 %% Auxiliar Functions to get resources from each Node.
-
 %%% Parses a single node string into a #node{} record.
 %%% Format: "ip:port:cpu:N:mem:N:gpu:N"
-get_node(Node) ->
-    case string:split(Node, ":", all) of
-        [Ip, Port | Resources] when length(Resources) >= 2 ->
-            ResourcePairs = to_pairs(Resources),
-            lists:foldl(fun assign_resource/2, #node{ip = Ip, port = Port}, ResourcePairs);
-        _ ->
-            invalid
-    end.
+%%% 
+validate_and_get_node(Node) ->
+  %% Check if the incoming Node Ip is valid.
+  [Ip | Rest] = string:split(Node, ":"),
+  {ok, _} = inet:parse_strict_address(Ip),
+
+  %% Check if the incoming Node Port is valid.
+  [Port | Rest2] = string:split(Rest, ":"),
+
+  IntPort = list_to_integer(Port),
+  true = is_integer(IntPort) and (IntPort >= 1) and (IntPort =< 65535),
+  %%nGet the resources and place them in pairs.
+  ResourcePairs = to_pairs(string:split(Rest2, ":", all)),
+  lists:foldl(fun assign_resource/2, #node{ip = Ip, port = Port}, ResourcePairs).
 
 %%% Converts a flat list of alternating keys and values into tuples.
 %%% Example: ["cpu", "4", "gpu", "1"] -> [{"cpu", 4}, {"gpu", 1}]
