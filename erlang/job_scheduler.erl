@@ -3,17 +3,17 @@
 -export([init/2, get_node_list/1]).
 
 
-init(NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
-  init(#{}, NRequests, Test).
+init(NRequests, Env) when is_integer(NRequests) ->
+  init(#{}, NRequests, Env).
 %% i.e State = #{sender_pid => Pid, receiver_pid => Pid, JobId1 => [Resources], JobId2 => ...}
-init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
+init(State, NRequests, Env) when is_integer(NRequests) ->
 
   receive
     {receiver_pid, ReceiverId} ->
       State1 = maps:put(receiver_pid, ReceiverId, State),
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "receiver_pid received", none),
       io:fwrite("[Erlang][INIT] receiver_pid=~p~n", [ReceiverId]),
-      init(State1, NRequests, Test);
+      init(State1, NRequests, Env);
 
     {sender_pid, SenderId} ->
       InitPid = self(),
@@ -22,17 +22,17 @@ init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
       spawn(fun() -> state_tick(InitPid) end),
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "sender_pid received", none),
       io:fwrite("[Erlang][INIT] sender_pid=~p~n", [SenderId]),
-      init(State1, NRequests, Test);
+      init(State1, NRequests, Env);
 
     {job_release, JobId} ->
       State1 = maps:remove(JobId, State),
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "releasing job", JobId),
-      init(State1, NRequests, Test);
+      init(State1, NRequests, Env);
 
     dump_state ->
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "dump_state", maps:without([sender_pid, receiver_pid], State)),
       io:fwrite("[Erlang][STATE]~s~n", [format_state(State)]),
-      init(State, NRequests, Test);
+      init(State, NRequests, Env);
 
     {packet_received, Packet} ->
       case handle_packet(Packet) of
@@ -41,14 +41,14 @@ init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
           io:fwrite("[Erlang][Recv] NODES count=~p~n", [length(NodeRecordList)]),
           NewState = lists:foldl(fun(_N, StateAcc) ->
             JobId = erlang:unique_integer([positive]),
-            {JobRequest, _AvailableResources} = generate_job_request(JobId, NodeRecordList, Test),
+            {JobRequest, _AvailableResources} = generate_job_request(JobId, NodeRecordList, Env),
             event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_request", JobId),
             io:fwrite("[Erlang][Sent] job_request id=~p~n", [JobId]),
             SenderId = maps:get(sender_pid, State),
             SenderId ! {job_directive, JobId, JobRequest},
             StateAcc#{JobId => pending}
           end, State, lists:seq(1, NRequests)),
-          init(NewState, NRequests, Test);
+          init(NewState, NRequests, Env);
 
         {job_granted, JobId} ->
           event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_granted", JobId),
@@ -58,15 +58,15 @@ init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
               State1 = maps:put(JobId, granted, State),
               SchedulerPid = self(),
               spawn(fun () -> simulate_load(JobId, State1, SchedulerPid) end),
-              init(State1, NRequests, Test);
+              init(State1, NRequests, Env);
             granted ->
               event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "duplicate job_granted ignored", JobId),
               io:fwrite("[Erlang][Recv] duplicate grant ignored id=~p~n", [JobId]),
-              init(State, NRequests, Test);
+              init(State, NRequests, Env);
             undefined ->
               event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "job_granted for unknown job", JobId),
               io:fwrite("[Erlang][ERR] grant for unknown id=~p~n", [JobId]),
-              init(State, NRequests, Test);
+              init(State, NRequests, Env);
             Other ->
               event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "Invalid state transition", JobId),
               io:fwrite("[Erlang][ERR] invalid state transition id=~p state=~p~n", [JobId, Other]),
@@ -77,23 +77,23 @@ init(State, NRequests, Test) when is_integer(NRequests) and is_boolean(Test) ->
           State1 = maps:remove(JobId, State),
           event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_denied", JobId),
           io:fwrite("[Erlang][Recv] denied id=~p~n", [JobId]),
-          init(State1, NRequests, Test);
+          init(State1, NRequests, Env);
 
         {job_timeout, JobId} ->
           State1 = maps:remove(JobId, State),
           event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_timeout", JobId),
           io:fwrite("[Erlang][Recv] timeout id=~p~n", [JobId]),
-          init(State1, NRequests, Test);
+          init(State1, NRequests, Env);
 
         {skip, _} ->
           event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "unknown packet received", none),
           io:fwrite("[Erlang][Recv] unknown packet~n", []),
-          init(State, NRequests, Test)
+          init(State, NRequests, Env)
       end;
     {ok, get_nodes} ->
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "get_nodes sent succesfully", none),
       io:fwrite("[Erlang][Sent] get_nodes ok~n", []),
-      init(State, NRequests, Test);
+      init(State, NRequests, Env);
 
     {error, Reason} ->
       event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, none),
@@ -200,7 +200,7 @@ assign_resource({"mem", Amount}, NodeRecord) ->
 %%% Resources are sorted by (NodeIp, ResourceType) to prevent deadlocks.
 %%% Params: JobId (integer), NodeRecordList (list of #node{})
 %%% Returns: {JobRequestString, SortedResources}
-generate_job_request(JobId, NodeRecordList, Test) ->
+generate_job_request(JobId, NodeRecordList, Env) ->
   %1. Choose how many nodes we use.
   N = rand:uniform(length(NodeRecordList)),
   %2. Pick N random nodes
@@ -227,11 +227,11 @@ generate_job_request(JobId, NodeRecordList, Test) ->
   % i.e [ {"192.168.1.2", mem, 100} , {"192.168.1.2",cpu, 2}, {"192.168.1.1", gpu, 1}, {"192.168.1.1", cpu, 4} ]
   AvailableResources = lists:flatten(lists:filtermap(fun(SelectedNode) -> pick_resources(SelectedNode) end, SelectedNodes)),
   % i.e [ {"192.168.1.2",[{cpu,2}, {mem,100}]}, {"192.168.1.1", [{cpu,4}, {gpu,1}]} ]
-  SortedResources = case Test of
-    true -> AvailableResources;
+  SortedResources = case Env of
     false -> lists:sort(fun ({Ip1, Port1, Resource1, _}, {Ip2, Port2, Resource2, _}) ->
                           {Ip1, Port1, resource_order(Resource1)} =< {Ip2, Port2, resource_order(Resource2)}
-                        end, AvailableResources)
+                        end, AvailableResources);
+    _ -> AvailableResources
   end,
   JobRequest = "JOB_REQUEST " ++ integer_to_list(JobId),
   JobRequest2 = lists:foldl(fun build_job_request/2, JobRequest, SortedResources) ++ "\n",

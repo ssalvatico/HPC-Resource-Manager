@@ -9,7 +9,6 @@
 -define(WORK_TIME, 5000).
 -define(GET_NODES_INTERVAL, 5000).
 -define(N_REQUESTS, 1).
--define(TEST, false).
 
 
 -record(logInfo,{

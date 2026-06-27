@@ -100,12 +100,15 @@ sender(Socket, JobSchedulerId) ->
 
 %%% Entry point. Spawns the logger and scheduler processes, then initiates
 %%% the TCP connection to the C agent.
-init() -> 
-    init(?HOST, ?PORT, ?N_REQUESTS, ?TEST).
+init() ->
+    Host = os:getenv("HOST", ?HOST),
+    Port = os:getenv("PORT", ?PORT),
+    Env = os:getenv("ENV", "DEV"),
+    init(Host, Port, ?N_REQUESTS, Env).
 
-init(Host, Port, NRequests, Test) ->
+init(Host, Port, NRequests, Env) ->
     ServLoggerId = spawn(event_logger, init, []),
     register(eventLoggerId, ServLoggerId),
     event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, initialization, self()),
-    JobSchedulerId = spawn(job_scheduler, init, [NRequests, Test]),
+    JobSchedulerId = spawn(job_scheduler, init, [NRequests, Env]),
     connect(Host, Port, ?TRIES, JobSchedulerId).
