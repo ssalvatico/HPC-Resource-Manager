@@ -41,7 +41,16 @@ static void add_to_outbox(out_msg_t *outbox, int *count, const char *msg, int ta
 /* HANDLERS - MESSAGING LOGIC (ERLANG & REMOTE NODES)                        */
 /* ========================================================================= */
 
-static void handle_get_nodes_response();
+static void handle_get_nodes_response(ServerContext *ctx, unsigned socket, out_msg_t *outbox, int *count) {
+    node_data_t NODE = (node_data_t)ctx->mynode;
+    char msg[BUFFER_SIZE] = {0};
+
+    pthread_mutex_lock(&NODE->lock_known);
+    get_known_nodes_payload(NODE->known_nodes, msg, sizeof(msg));
+    pthread_mutex_unlock(&NODE->lock_known);
+
+    add_to_outbox(outbox, count, msg, socket, NULL, 0);
+}
 
 /**
  * @brief Processes the initial JOB_REQUEST from the local Erlang scheduler.
@@ -426,7 +435,7 @@ void resource_adapter_patch(ServerContext *ctx, char *SENDER_IP, unsigned SOCKET
         case ACTION_RESPOND:
             if (BUFFER == NULL) break;
             
-            if      (strncmp(BUFFER, "GET_NODES", 9)    == 0) falta_un_caso;
+            if      (strncmp(BUFFER, "GET_NODES", 9)    == 0) handle_get_nodes_response(ctx, SOCKET, outbox, outbox_count);
             else if (strncmp(BUFFER, "JOB_REQUEST", 11) == 0) handle_job_request(ctx, SOCKET, BUFFER, outbox, outbox_count);
             else if (strncmp(BUFFER, "RESERVE", 7)      == 0) handle_reserve(ctx, SOCKET, BUFFER, outbox, outbox_count);
             else if (strncmp(BUFFER, "GRANTED", 7)      == 0) handle_granted(ctx, SENDER_IP, get_connection_port(SOCKET), SOCKET, BUFFER, outbox, outbox_count);
