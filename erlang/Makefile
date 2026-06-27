@@ -21,10 +21,10 @@ run_test: build
 	erl -pa $(EBIN) -noshell \
 		-eval "os:putenv(\"ENV\", \"test\"), erlang_c_bridge:init(8000,3,true), timer:sleep(infinity)"
 
-clean:
+clear:
 	rm -rf $(EBIN)
 	rm -f *.dump
+	rm event_logger.txt
 
-clear: clean
 
 .PHONY: build run run_test clear
