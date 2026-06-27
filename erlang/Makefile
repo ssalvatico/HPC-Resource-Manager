@@ -22,9 +22,8 @@ run_test: build
 		-eval "os:putenv(\"ENV\", \"test\"), erlang_c_bridge:init(8000,3,true), timer:sleep(infinity)"
 
 clear:
-	rm -rf $(EBIN)
-	rm -f *.dump
-	rm event_logger.txt
-
+	@rm -rf $(EBIN)
+	@rm -f *.dump
+	@rm -f event_logger.txt
 
 .PHONY: build run run_test clear
