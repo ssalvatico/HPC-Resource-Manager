@@ -102,7 +102,7 @@ sender(Socket, JobSchedulerId) ->
 %%% the TCP connection to the C agent.
 init() ->
     Host = os:getenv("HOST", ?HOST),
-    Port = os:getenv("PORT", ?PORT),
+    Port = list_to_integer(os:getenv("PORT", ?PORT)),
     Env = os:getenv("ENV", "DEV"),
     init(Host, Port, ?N_REQUESTS, Env).
 
