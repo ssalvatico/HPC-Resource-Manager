@@ -18,7 +18,7 @@ int main(int argc, char *argv[]) {
     // Clean initialization
     ServerContext ctx;
     init_server(&ctx, argc, argv);
-    node_data_t my_node = init_node((unsigned)atoi(argv[3]), (unsigned)atoi(argv[5]), (unsigned)atoi(argv[4]));
+    node_data_t my_node = init_node((unsigned)atoi(argv[3]), (unsigned)atoi(argv[4]), (unsigned)atoi(argv[5]));
     ctx.mynode = my_node;
     init_thread_pool(&ctx, atoi(argv[6]));
     // TODO: CERRAR DE FORMA LIMPIA EL SERVIDOR CERRANDO LOS

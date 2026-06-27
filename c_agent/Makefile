@@ -8,6 +8,13 @@ INCLUDES = -Iinclude
 
 BUILD_DIR = c_build
 
+IP ?= $(shell hostname -I | awk '{print $$1}')
+PORT ?= 8001
+CPU ?= 4
+GPU ?= 1
+RAM ?= 8192
+THREADS ?= 4
+
 # 1. SOLO ARCHIVOS DE PRODUCCIÓN (Cero tests aquí para evitar choques de main)
 SRCS = main.c \
 	   src/comms/event_handler.c \
@@ -37,7 +44,7 @@ $(BUILD_DIR)/%.o: %.c
 
 # 2. Comando RUN actualizado con 6 parámetros: IP Port CPU GPU RAM Hilos
 run: $(TARGET)
-	./$(TARGET) 127.0.0.1 8001 4 8192 1 4
+	./$(TARGET) "$(IP)" "$(PORT)" "$(CPU)" "$(GPU)" "$(RAM)" "$(THREADS)"
 
 
 clear:

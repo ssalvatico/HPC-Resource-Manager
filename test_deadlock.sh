@@ -39,7 +39,7 @@ trap cleanup EXIT INT TERM
 make -C "$CAGENT_DIR"
 make -C "$ERLANG_DIR" build
 
-"$CAGENT_DIR/c_agent" "$IP" "$PORT" "$CPU" "$MEM" "$GPU" "$THREADS" &
+"$CAGENT_DIR/c_agent" "$IP" "$PORT" "$CPU" "$GPU" "$MEM" "$THREADS" &
 C_PID=$!
 
 erl -pa "$ERLANG_DIR/ebin" -noshell \
