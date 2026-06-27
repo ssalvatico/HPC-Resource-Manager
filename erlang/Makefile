@@ -1,5 +1,9 @@
 EBIN = ebin
 
+HOST=127.0.0.1
+PORT=8001
+ENV=DEV
+
 MODULES = \
 	erlang_c_bridge \
 	event_logger \
@@ -13,13 +17,17 @@ build: $(EBIN) $(MODULES:%=$(EBIN)/%.beam)
 $(EBIN)/%.beam: %.erl header.hrl
 	erlc -o $(EBIN) $<
 
+
 run: build
+	HOST=$(HOST) PORT=$(PORT) \
 	erl -pa $(EBIN) -noshell \
 		-eval "erlang_c_bridge:init(), timer:sleep(infinity)"
 
 run_test: build
+	HOST=$(HOST) PORT=$(PORT) \
+	ENV=TEST \
 	erl -pa $(EBIN) -noshell \
-		-eval "os:putenv(\"ENV\", \"test\"), erlang_c_bridge:init(8000,3,true), timer:sleep(infinity)"
+		-eval "erlang_c_bridge:init(), timer:sleep(infinity)"
 
 clear:
 	@rm -rf $(EBIN)

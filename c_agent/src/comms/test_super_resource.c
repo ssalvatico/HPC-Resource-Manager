@@ -54,7 +54,7 @@ int main() {
 
     // Inicializamos un nodo con 4 CPU, 1 GPU y 8192 RAM
     ServerContext ctx;
-    ctx.erlang_tcp_fd = 99; // FD falso para Erlang
+    ctx.erlang_tcp_fd = 98; // FD falso para Erlang
     ctx.mynode = init_node(4, 1, 8192); 
     assert_cond(ctx.mynode != NULL, "Inicializacion del chasis (node_structures)");
 
@@ -67,7 +67,7 @@ int main() {
     printf("\n\033[1;36m>>> TEST A: Camino Feliz (Erlang -> Red -> Erlang)\033[0m\n");
     
     // 1. Erlang pide recursos a dos nodos
-    resource_adapter_patch(&ctx, "127.0.0.1", ctx.erlang_tcp_fd, 
+    resource_adapter_patch(&ctx, "127.0.0.1", 99,
         "JOB_REQUEST 100 @192.168.1.10:8010:cpu:2 @192.168.1.11:8011:mem:1024", outbox, &count, ACTION_RESPOND);
     assert_cond(count == 1 && strstr(outbox[0].message, "RESERVE 100 cpu 2"), "A1. Se envio el primer RESERVE");
     
@@ -87,7 +87,7 @@ int main() {
        ------------------------------------------------------------------------- */
     printf("\n\033[1;36m>>> TEST B: Liberacion de un Job completado (JOB_RELEASE)\033[0m\n");
     
-    resource_adapter_patch(&ctx, "127.0.0.1", ctx.erlang_tcp_fd, "JOB_RELEASE 100", outbox, &count, ACTION_RESPOND);
+    resource_adapter_patch(&ctx, "127.0.0.1", 99, "JOB_RELEASE 100", outbox, &count, ACTION_RESPOND);
     assert_cond(count == 2, "B1. Genero exactamente 2 mensajes de RELEASE");
     int rel_ok = (strstr(outbox[0].message, "RELEASE 100") && strstr(outbox[1].message, "RELEASE 100"));
     assert_cond(rel_ok, "B2. Los mensajes generados devuelven los recursos a los nodos");
@@ -98,7 +98,7 @@ int main() {
     printf("\n\033[1;36m>>> TEST C: Rechazo por DENIED y Rollback\033[0m\n");
     
     // Erlang pide el Job 200
-    resource_adapter_patch(&ctx, "127.0.0.1", ctx.erlang_tcp_fd, "JOB_REQUEST 200 @192.168.1.10:8010:cpu:1 @192.168.1.12:8012:gpu:1", outbox, &count, ACTION_RESPOND);
+    resource_adapter_patch(&ctx, "127.0.0.1", 99, "JOB_REQUEST 200 @192.168.1.10:8010:cpu:1 @192.168.1.12:8012:gpu:1", outbox, &count, ACTION_RESPOND);
     
     // Nodo 1 acepta
     resource_adapter_patch(&ctx, "192.168.1.10", 10, "GRANTED 200", outbox, &count, ACTION_RESPOND);
@@ -110,7 +110,7 @@ int main() {
     debug_outbox(outbox, count);
     assert_cond(count == 2, "C1. Genero 2 mensajes (Rollback + Notificacion a Erlang)");
     assert_cond(strstr(outbox[0].message, "RELEASE 200 cpu 1"), "C2. Se genero el RELEASE para el nodo que habia dicho que si");
-    assert_cond(strstr(outbox[1].message, "JOB_DENIED 200") && outbox[1].target_fd == 99, "C3. Se informo JOB_DENIED a Erlang");
+    assert_cond(strcmp(outbox[1].message, "JOB_DENIED 200\n") == 0 && outbox[1].target_fd == 99, "C3. Se informo JOB_DENIED a Erlang");
 
     /* -------------------------------------------------------------------------
        TEST D: EL FALLO SILENCIOSO TCP (Desconexión Instantánea)
@@ -118,7 +118,7 @@ int main() {
     printf("\n\033[1;36m>>> TEST D: Tolerancia a caidas TCP (Rollback por Desconexion)\033[0m\n");
     
     // Erlang pide el Job 300
-    resource_adapter_patch(&ctx, "127.0.0.1", ctx.erlang_tcp_fd, "JOB_REQUEST 300 @192.168.1.10:8010:cpu:1 @192.168.1.15:8015:ram:100", outbox, &count, ACTION_RESPOND);
+    resource_adapter_patch(&ctx, "127.0.0.1", 99, "JOB_REQUEST 300 @192.168.1.10:8010:cpu:1 @192.168.1.15:8015:ram:100", outbox, &count, ACTION_RESPOND);
     
     // Nodo 1 acepta
     resource_adapter_patch(&ctx, "192.168.1.10", 10, "GRANTED 300", outbox, &count, ACTION_RESPOND);
@@ -152,6 +152,9 @@ int main() {
     debug_outbox(outbox, count);
     assert_cond(count == 1 && strstr(outbox[0].message, "GRANTED 401"), "E3. Al liberar recursos, se desbloqueo al Nodo B de la cola automaticamente");
     assert_cond(outbox[0].target_fd == 21, "E4. El GRANTED se envio al FD del Nodo B");
+
+    resource_adapter_patch(&ctx, "192.168.1.22", 22, "RESERVE 402 cpu 5", outbox, &count, ACTION_RESPOND);
+    assert_cond(count == 1 && strcmp(outbox[0].message, "DENIED 402\n") == 0 && outbox[0].target_fd == 22, "E5. Una reserva imposible recibe DENIED");
 
     /* -------------------------------------------------------------------------
        TEST F: LIMPIEZA TOTAL DE MEMORIA

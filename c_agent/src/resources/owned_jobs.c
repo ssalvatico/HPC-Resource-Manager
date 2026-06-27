@@ -26,6 +26,7 @@ typedef struct {
  */
 typedef struct {
     unsigned job_id;                /**< Unique identifier from Erlang */
+    unsigned owner_socket;
     int grant_notified;             /**< Flag to ensure Erlang is notified only once when completed */
     time_t created_at;              /**< Timestamp for garbage collection (timeouts) */
     
@@ -82,11 +83,12 @@ void delete_owned_jobs(owned_jobs_t jobs) {
 /* JOB CONSTRUCTION (POPULATING FROM ERLANG)                                 */
 /* ========================================================================= */
 
-int add_new_owned_job(owned_jobs_t jobs, unsigned job_id) {
+int add_new_owned_job(owned_jobs_t jobs, unsigned job_id, unsigned owner_socket) {
     elem_owned_job_t * new_job = malloc(sizeof(elem_owned_job_t));
     if (!new_job) return 0;
 
     new_job->job_id = job_id;
+    new_job->owner_socket = owner_socket;
     new_job->grant_notified = 0;
     new_job->created_at = time(NULL);
     new_job->petition_count = 0;
@@ -94,6 +96,12 @@ int add_new_owned_job(owned_jobs_t jobs, unsigned job_id) {
 
     tablahash_insertar(jobs, new_job);
     return 1;
+}
+
+unsigned get_job_owner_socket(owned_jobs_t jobs, unsigned job_id) {
+    elem_owned_job_t dummy = { .job_id = job_id };
+    elem_owned_job_t * job = tablahash_buscar(jobs, &dummy);
+    return job ? job->owner_socket : 0;
 }
 
 int append_petition_to_job(owned_jobs_t jobs, unsigned job_id, const char * ip, unsigned port, resource_t type, unsigned quantity) {
@@ -123,31 +131,28 @@ int append_petition_to_job(owned_jobs_t jobs, unsigned job_id, const char * ip, 
 int mark_petition_as_granted(owned_jobs_t jobs, unsigned job_id, const char * ip, unsigned port) {
     elem_owned_job_t dummy = { .job_id = job_id };
     elem_owned_job_t * job = tablahash_buscar(jobs, &dummy);
-    if (!job) return 0;
+    if (!job || job->next_reserve_idx == 0) return -1;
+
+    unsigned idx = job->next_reserve_idx - 1;
+    if (job->petitions[idx].port != port || strcmp(job->petitions[idx].ip, ip) != 0) return -1;
+    if (job->petitions[idx].is_granted) return -1;
+
+    job->petitions[idx].is_granted = 1;
 
     int all_granted = 1;
-    
-    // Iterate over the requests to mark the specific node that answered
     for (unsigned i = 0; i < job->petition_count; i++) {
-        
-        // Match the respondent node
-        if (job->petitions[i].port == port && strcmp(job->petitions[i].ip, ip) == 0) {
-            job->petitions[i].is_granted = 1; 
-        }
-        
-        // Check if there are still pending nodes
-        if (job->petitions[i].is_granted == 0) {
-            all_granted = 0; 
+        if (!job->petitions[i].is_granted) {
+            all_granted = 0;
+            break;
         }
     }
 
-    // If every single node responded positively and we haven't notified Erlang yet
     if (all_granted && !job->grant_notified) {
         job->grant_notified = 1;
-        return 1; // Job 100% complete
+        return 1;
     }
     
-    return 0; // Job is still waiting for more GRANTED messages
+    return 0;
 }
 
 

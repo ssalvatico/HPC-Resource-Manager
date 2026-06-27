@@ -239,21 +239,21 @@ void handle_gc_timer_expiration(ServerContext* ctx) {
     read(ctx->gc_timerfd, &exp, sizeof(uint64_t)); // Limpiar el timer
     
     out_msg_t outbox[MAX_OUTBOX];
-    int outbox_count = 0;
-    
-    // juani revisa nodos 
-    resource_adapter_patch(
-        ctx, 
-        NULL,           // No hay IP
-        -1,             // No hay socket
-        NULL,           // No hay mensaje
-        outbox, 
-        &outbox_count, 
-        ACTION_CHECK_DEADNODES 
-    );
+    int outbox_count;
 
-    // puede que quiere enviar un timeout o denied
-    send_outbox(ctx, outbox, outbox_count);
+    do {
+        outbox_count = 0;
+        resource_adapter_patch(
+            ctx,
+            NULL,
+            -1,
+            NULL,
+            outbox,
+            &outbox_count,
+            ACTION_CHECK_DEADNODES
+        );
+        send_outbox(ctx, outbox, outbox_count);
+    } while (outbox_count > 0);
 }
 
 void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count) {
