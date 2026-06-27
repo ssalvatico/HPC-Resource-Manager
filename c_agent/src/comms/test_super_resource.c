@@ -110,7 +110,7 @@ int main() {
     debug_outbox(outbox, count);
     assert_cond(count == 2, "C1. Genero 2 mensajes (Rollback + Notificacion a Erlang)");
     assert_cond(strstr(outbox[0].message, "RELEASE 200 cpu 1"), "C2. Se genero el RELEASE para el nodo que habia dicho que si");
-    assert_cond(strstr(outbox[1].message, "JOB_DENIED 200") && outbox[1].target_fd == 99, "C3. Se informo JOB_DENIED a Erlang");
+    assert_cond(strcmp(outbox[1].message, "JOB_DENIED 200\n") == 0 && outbox[1].target_fd == 99, "C3. Se informo JOB_DENIED a Erlang");
 
     /* -------------------------------------------------------------------------
        TEST D: EL FALLO SILENCIOSO TCP (Desconexión Instantánea)
@@ -152,6 +152,9 @@ int main() {
     debug_outbox(outbox, count);
     assert_cond(count == 1 && strstr(outbox[0].message, "GRANTED 401"), "E3. Al liberar recursos, se desbloqueo al Nodo B de la cola automaticamente");
     assert_cond(outbox[0].target_fd == 21, "E4. El GRANTED se envio al FD del Nodo B");
+
+    resource_adapter_patch(&ctx, "192.168.1.22", 22, "RESERVE 402 cpu 5", outbox, &count, ACTION_RESPOND);
+    assert_cond(count == 1 && strcmp(outbox[0].message, "DENIED 402\n") == 0 && outbox[0].target_fd == 22, "E5. Una reserva imposible recibe DENIED");
 
     /* -------------------------------------------------------------------------
        TEST F: LIMPIEZA TOTAL DE MEMORIA

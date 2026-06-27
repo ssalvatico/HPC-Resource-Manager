@@ -113,6 +113,10 @@ static void handle_reserve(ServerContext *ctx, unsigned socket, const char *buff
         char msg[64];
         snprintf(msg, sizeof(msg), "GRANTED %u\n", job_id);
         add_to_outbox(outbox, count, msg, socket, NULL, 0);
+    } else if (result == -1) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "DENIED %u\n", job_id);
+        add_to_outbox(outbox, count, msg, socket, NULL, 0);
     }
     // Note: If result == 0 (WAIT), we do nothing. The request is safely queued.
     pthread_mutex_unlock(&NODE->lock_local);
@@ -133,13 +137,14 @@ static void handle_granted(ServerContext *ctx, const char *sender_ip, unsigned s
     pthread_mutex_lock(&NODE->lock_owned);
 
     // 1. Mark petition as granted
-    if (mark_petition_as_granted(NODE->owned_jobs, job_id, sender_ip, sender_port)) {
+    int grant_result = mark_petition_as_granted(NODE->owned_jobs, job_id, sender_ip, sender_port);
+    if (grant_result == 1) {
         // Job is 100% Complete: Notify Erlang
         char msg[64];
         unsigned owner_socket = get_job_owner_socket(NODE->owned_jobs, job_id);
         snprintf(msg, sizeof(msg), "JOB_GRANTED %u\n", job_id);
         add_to_outbox(outbox, count, msg, owner_socket, NULL, 0);
-    } else {
+    } else if (grant_result == 0) {
         // Job incomplete: Dispatch the next RESERVE in the queue
         char *ip_next; unsigned port_next, cant_next; resource_t type_next;
         if (get_next_reserve(NODE->owned_jobs, job_id, &ip_next, &port_next, &type_next, &cant_next)) {
@@ -299,6 +304,8 @@ static void handle_check_deadnodes(ServerContext *ctx, out_msg_t *outbox, int *c
         resource_t types[MAX_JOB_RESOURCES];
         unsigned granted = get_granted_resources(NODE->owned_jobs, job_id, ips, ports, types, cants, MAX_JOB_RESOURCES);
         unsigned owner_socket = get_job_owner_socket(NODE->owned_jobs, job_id);
+
+        if (*count + (int)granted + 1 > MAX_OUTBOX) break;
 
         for (unsigned j = 0; j < granted; j++) {
             char msg[128];

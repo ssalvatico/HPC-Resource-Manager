@@ -74,7 +74,7 @@ int append_petition_to_job(owned_jobs_t jobs, unsigned job_id, const char * ip, 
  * @param job_id The identifier of the job that received the grant.
  * @param ip The IP of the remote node that granted the resource.
  * @param port The port of the remote node that granted the resource.
- * @return 1 if the ENTIRE job is now 100% complete and Erlang should be notified. 0 otherwise.
+ * @return 1 if the job is complete, 0 if it remains pending, -1 if the response does not match.
  */
 int mark_petition_as_granted(owned_jobs_t jobs, unsigned job_id, const char * ip, unsigned port);
 

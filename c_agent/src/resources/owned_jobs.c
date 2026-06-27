@@ -131,31 +131,28 @@ int append_petition_to_job(owned_jobs_t jobs, unsigned job_id, const char * ip, 
 int mark_petition_as_granted(owned_jobs_t jobs, unsigned job_id, const char * ip, unsigned port) {
     elem_owned_job_t dummy = { .job_id = job_id };
     elem_owned_job_t * job = tablahash_buscar(jobs, &dummy);
-    if (!job) return 0;
+    if (!job || job->next_reserve_idx == 0) return -1;
+
+    unsigned idx = job->next_reserve_idx - 1;
+    if (job->petitions[idx].port != port || strcmp(job->petitions[idx].ip, ip) != 0) return -1;
+    if (job->petitions[idx].is_granted) return -1;
+
+    job->petitions[idx].is_granted = 1;
 
     int all_granted = 1;
-    
-    // Iterate over the requests to mark the specific node that answered
     for (unsigned i = 0; i < job->petition_count; i++) {
-        
-        // Match the respondent node
-        if (job->petitions[i].port == port && strcmp(job->petitions[i].ip, ip) == 0) {
-            job->petitions[i].is_granted = 1; 
-        }
-        
-        // Check if there are still pending nodes
-        if (job->petitions[i].is_granted == 0) {
-            all_granted = 0; 
+        if (!job->petitions[i].is_granted) {
+            all_granted = 0;
+            break;
         }
     }
 
-    // If every single node responded positively and we haven't notified Erlang yet
     if (all_granted && !job->grant_notified) {
         job->grant_notified = 1;
-        return 1; // Job 100% complete
+        return 1;
     }
     
-    return 0; // Job is still waiting for more GRANTED messages
+    return 0;
 }
 
 
