@@ -18,6 +18,7 @@ typedef struct {
     int tcp_timerfd;
     int udp_timerfd;
     int gc_timerfd; //garage collector
+    // UNIQUE MODIFIABLE VARIABLE FROM SERVER CONTEXT
     void* mynode;
 } ServerContext;
 

@@ -3,7 +3,6 @@
 
 #define MAX_EVENTS 10
 #include "server_types.h"
-#include "../resources/node-structures.h"
 #include <stdint.h>
 #include <pthread.h>
 
@@ -116,8 +115,6 @@ void handle_gc_timer_expiration(ServerContext* ctx);
  * @return Void.
  */
 void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count);
-
-void resource_adapter_patch(node_data_t NODE, char * SENDER_IP, unsigned SOCKET, const char * BUFFER, out_msg_t * outbox, int * outbox_count, JuaniAction action);
 
 int find_fd_by_ip_port(const char* target_ip, unsigned target_port);
 

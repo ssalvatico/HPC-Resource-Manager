@@ -1,309 +1,441 @@
-#include "../../include/resources/node-structures.h"
+#include "../../include/comms/resource_adapter.h"
+#include "../../include/resources/node_structures.h"
 #include "../../include/comms/server_types.h"
-#include "../../include/comms/event_handler.h"
-#include <string.h>
 #include <stdio.h>
-#include <ifaddrs.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
+#include <string.h>
+#include <stdlib.h>
 
-#include <pthread.h>
 
-pthread_mutex_t juani_mutex = PTHREAD_MUTEX_INITIALIZER;
-static unsigned local_agent_port = 0;
+/* ========================================================================= */
+/* INTERNAL HELPERS                                                          */
+/* ========================================================================= */
 
-static int is_local_ip(const char *ip) {
-    if (ip == NULL) return 0;
-    if (strcmp(ip, "127.0.0.1") == 0) return 1;
+/**
+ * @brief Safely formats and appends a new message to the outgoing message queue.
+ * @param outbox The array representing the outgoing message queue.
+ * @param count Pointer to the current number of messages in the outbox.
+ * @param msg The raw string message to send.
+ * @param target_fd The target file descriptor (-1 if routing by IP/Port).
+ * @param ip The target IP address (NULL if routing by FD).
+ * @param port The target TCP port (0 if routing by FD).
+ */
+static void add_to_outbox(out_msg_t *outbox, int *count, const char *msg, int target_fd, const char *ip, unsigned port) {
+    if (*count >= MAX_OUTBOX) return; // Prevent buffer overflow
+    
+    snprintf(outbox[*count].message, sizeof(outbox[*count].message), "%s", msg);
+    outbox[*count].target_fd = target_fd;
+    outbox[*count].target_port = port;
 
-    struct ifaddrs *ifaddr;
-    if (getifaddrs(&ifaddr) == -1) return 0;
-
-    int found = 0;
-    for (struct ifaddrs *ifa = ifaddr; ifa != NULL && !found; ifa = ifa->ifa_next) {
-        if (ifa->ifa_addr == NULL || ifa->ifa_addr->sa_family != AF_INET) continue;
-
-        char addr[INET_ADDRSTRLEN];
-        struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
-        if (inet_ntop(AF_INET, &sa->sin_addr, addr, sizeof(addr)) != NULL) {
-            found = strcmp(ip, addr) == 0;
-        }
+    if (ip != NULL) {
+        strncpy(outbox[*count].target_ip, ip, sizeof(outbox[*count].target_ip) - 1);
+        outbox[*count].target_ip[sizeof(outbox[*count].target_ip) - 1] = '\0';
+    } else {
+        outbox[*count].target_ip[0] = '\0';
     }
 
-    freeifaddrs(ifaddr);
-    return found;
+    (*count)++;
 }
 
-static const char *resource_name(resource_t type) {
-    if (type == CPU) return "cpu";
-    if (type == GPU) return "gpu";
-    return "mem";
+
+/* ========================================================================= */
+/* HANDLERS - MESSAGING LOGIC (ERLANG & REMOTE NODES)                        */
+/* ========================================================================= */
+
+static void handle_get_nodes_response();
+
+/**
+ * @brief Processes the initial JOB_REQUEST from the local Erlang scheduler.
+ */
+static void handle_job_request(ServerContext *ctx, unsigned socket, const char *buffer, out_msg_t *outbox, int *count) {
+    socket = socket; // Prevent warning for unused variable
+    node_data_t NODE = (node_data_t)ctx->mynode;
+    unsigned job_id;
+    
+    // Safety check: Ensure the protocol format is correct
+    if (sscanf(buffer, "JOB_REQUEST %u", &job_id) != 1) return;
+    
+    char *dup = strdup(buffer);
+    if (!dup) return; // Safety check: memory allocation failure
+    
+    pthread_mutex_lock(&NODE->lock_owned);
+
+    // 1. Register the base Job
+    add_new_owned_job(NODE->owned_jobs, job_id);
+    
+    // 2. Parse resource petitions
+    char *token = strtok(dup, " "); // skip "JOB_REQUEST"
+    token = strtok(NULL, " ");      // skip "job_id"
+    token = strtok(NULL, " ");      // first "@ip:port:res:qty"
+    
+    while (token != NULL) {
+        char ip[16], res[10]; unsigned port, cant;
+        if (sscanf(token, "@%15[^:]:%u:%9[^:]:%u", ip, &port, res, &cant) == 4) {
+            resource_t type = (strcmp(res, "cpu") == 0) ? CPU : (strcmp(res, "mem") == 0) ? RAM : GPU;
+            append_petition_to_job(NODE->owned_jobs, job_id, ip, port, type, cant);
+        }
+        token = strtok(NULL, " ");
+    }
+    pthread_mutex_unlock(&NODE->lock_owned);
+    free(dup);
+    
+    // 3. Dispatch the first RESERVE message of the chain
+    char *ip_next; unsigned port_next, cant_next; resource_t type_next;
+    if (get_next_reserve(NODE->owned_jobs, job_id, &ip_next, &port_next, &type_next, &cant_next)) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "RESERVE %u %s %u\n", job_id, (type_next==CPU)?"cpu":(type_next==RAM)?"mem":"gpu", cant_next);
+        add_to_outbox(outbox, count, msg, -1, ip_next, port_next);
+    }
 }
 
-static void append_next_reserve(node_data_t NODE, unsigned job_id, unsigned erlang_socket, out_msg_t *outbox, int *outbox_count) {
-    while (*outbox_count < MAX_OUTBOX) {
-        char *target_ip = NULL;
-        unsigned target_port = 0;
-        resource_t type;
-        unsigned amount = 0;
+/**
+ * @brief Handles incoming RESERVE messages from remote nodes requesting local resources.
+ */
+static void handle_reserve(ServerContext *ctx, unsigned socket, const char *buffer, out_msg_t *outbox, int *count) {
+    node_data_t NODE = (node_data_t)ctx->mynode;
+    unsigned job_id, cant; char res[10];
+    
+    if (sscanf(buffer, "RESERVE %u %9s %u", &job_id, res, &cant) != 3) return;
+    resource_t type = (strcmp(res, "cpu") == 0) ? CPU : (strcmp(res, "mem") == 0) ? RAM : GPU;
+    
+    pthread_mutex_lock(&NODE->lock_local);
 
-        pthread_mutex_lock(&juani_mutex);
-        unsigned has_next = get_next_job_data(NODE, job_id, &target_ip, &target_port, &type, &amount);
-        pthread_mutex_unlock(&juani_mutex);
-
-        if (!has_next) return;
-
-        char reserve_msg[BUFFER_SIZE];
-        sprintf(reserve_msg, "RESERVE %u %s %u\n", job_id, resource_name(type), amount);
-
-        if (is_local_ip(target_ip) && target_port == local_agent_port) {
-            char reserve_out[BUFFER_SIZE] = {0};
-            char granted_out[BUFFER_SIZE] = {0};
-
-            pthread_mutex_lock(&juani_mutex);
-            master_function(NODE, target_ip, target_port, erlang_socket, reserve_msg, reserve_out, BUFFER_SIZE);
-            if (strlen(reserve_out) > 0) {
-                master_function(NODE, target_ip, target_port, erlang_socket, reserve_out, granted_out, BUFFER_SIZE);
-            }
-            pthread_mutex_unlock(&juani_mutex);
-
-            if (strlen(granted_out) > 0) {
-                strcpy(outbox[*outbox_count].message, granted_out);
-                outbox[*outbox_count].target_fd = erlang_socket;
-                (*outbox_count)++;
-                return;
-            }
-
-            if (strlen(reserve_out) == 0) return;
-            continue;
-        }
-
-        strcpy(outbox[*outbox_count].message, reserve_msg);
-        strcpy(outbox[*outbox_count].target_ip, target_ip);
-        outbox[*outbox_count].target_port = target_port;
-        outbox[*outbox_count].target_fd = -1;
-        (*outbox_count)++;
-        return;
+    int result = new_job_request(NODE->resources, NODE->active_jobs, job_id, socket, cant, type);
+    
+    if (result == 1) { // Resources Granted Immediately
+        char msg[64];
+        snprintf(msg, sizeof(msg), "GRANTED %u\n", job_id);
+        add_to_outbox(outbox, count, msg, socket, NULL, 0);
     }
+    // Note: If result == 0 (WAIT), we do nothing. The request is safely queued.
+    pthread_mutex_unlock(&NODE->lock_local);
 }
 
-void resource_adapter_patch(node_data_t NODE, char * SENDER_IP, unsigned SOCKET, const char * BUFFER, out_msg_t * outbox, int * outbox_count, JuaniAction action) {
-    char juani_out[BUFFER_SIZE] = {0};
-    unsigned sender_port = get_connection_port(SOCKET);
-    if (outbox_count) *outbox_count = 0;
+/**
+ * @brief Processes GRANTED messages from remote nodes. 
+ * Marks the petition as done and either notifies Erlang or triggers the next RESERVE.
+ */
+static void handle_granted(ServerContext *ctx, const char *sender_ip, unsigned sender_port, unsigned socket, const char *buffer, out_msg_t *outbox, int *count) {
+    socket = socket; // Prevent warning for unused variable
+    node_data_t NODE = (node_data_t)ctx->mynode;
+    unsigned job_id;
+    
+    if (sscanf(buffer, "GRANTED %u", &job_id) != 1) return;
+    if (sender_port == 0) return; // Prevent matching against invalid port
+    
+    pthread_mutex_lock(&NODE->lock_owned);
 
-    // ----------------------------------------------------------------------
-    // 1. TIMERS AND UDP DISCOVERY
-    // ----------------------------------------------------------------------
-    if (action == ACTION_GET_RESOURCES) {
-        local_agent_port = SOCKET;
-        unsigned cpu, gpu, ram;
-        // Get resources from the resource manager
-        pthread_mutex_lock(&juani_mutex); 
-        get_local_resources(NODE, &cpu, &gpu, &ram);
-        pthread_mutex_unlock(&juani_mutex);
-        // We get the port from unsigned  socket, juani do not manage socket 
-        int tcp_public_port = SOCKET; // we call it socket but its not a socket je
-        // "ANNOUNCE port cpu:X mem:Y gpu:Z"
-        sprintf(outbox[0].message, "ANNOUNCE %d cpu:%u mem:%u gpu:%u\n", tcp_public_port, cpu, ram, gpu);
-        *outbox_count = 1;
-        return;
-    }
-    if (action == ACTION_CHECK_DEADNODES) {
-        unsigned target_socket;
-        while (1) {
-            pthread_mutex_lock(&juani_mutex);
-            int pending_job = chk_job_request(NODE, juani_out, BUFFER_SIZE, &target_socket);
-            pthread_mutex_unlock(&juani_mutex);
-
-            if (pending_job == -1 || *outbox_count >= MAX_OUTBOX) break;
-
-            strcpy(outbox[*outbox_count].message, juani_out);
-            outbox[*outbox_count].target_fd = target_socket;  // acá usás el socket
-            (*outbox_count)++;
+    // 1. Mark petition as granted
+    if (mark_petition_as_granted(NODE->owned_jobs, job_id, sender_ip, sender_port)) {
+        // Job is 100% Complete: Notify Erlang
+        char msg[64];
+        snprintf(msg, sizeof(msg), "JOB_GRANTED %u\n", job_id);
+        add_to_outbox(outbox, count, msg, ctx->erlang_tcp_fd, NULL, 0);
+    } else {
+        // Job incomplete: Dispatch the next RESERVE in the queue
+        char *ip_next; unsigned port_next, cant_next; resource_t type_next;
+        if (get_next_reserve(NODE->owned_jobs, job_id, &ip_next, &port_next, &type_next, &cant_next)) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "RESERVE %u %s %u\n", job_id, (type_next==CPU)?"cpu":(type_next==RAM)?"mem":"gpu", cant_next);
+            add_to_outbox(outbox, count, msg, -1, ip_next, port_next);
         }
-
-        unsigned job_ids[50];
-        unsigned owner_sockets[50];
-        pthread_mutex_lock(&juani_mutex);
-        unsigned timeout_count = collect_timed_out_jobs(NODE, job_ids, owner_sockets, 50);
-        pthread_mutex_unlock(&juani_mutex);
-
-        for (unsigned t = 0; t < timeout_count && *outbox_count < MAX_OUTBOX; t++) {
-            unsigned job_id = job_ids[t];
-
-            char *job_ips[50];
-            unsigned job_ports[50];
-            resource_t job_types[50];
-            unsigned job_amounts[50];
-
-            pthread_mutex_lock(&juani_mutex);
-            unsigned count = get_job_data(NODE, job_id, job_ips, job_ports, job_types, job_amounts, 50);
-            pthread_mutex_unlock(&juani_mutex);
-
-            for (unsigned i = 0; i < count && *outbox_count < MAX_OUTBOX; i++) {
-                const char *res_str = resource_name(job_types[i]);
-                char release_msg[BUFFER_SIZE];
-                sprintf(release_msg, "RELEASE %u %s %u\n", job_id, res_str, job_amounts[i]);
-
-                if (is_local_ip(job_ips[i]) && job_ports[i] == local_agent_port) {
-                    pthread_mutex_lock(&juani_mutex);
-                    master_function(NODE, job_ips[i], job_ports[i], owner_sockets[t], release_msg, juani_out, BUFFER_SIZE);
-                    pthread_mutex_unlock(&juani_mutex);
-                    continue;
-                }
-
-                strcpy(outbox[*outbox_count].message, release_msg);
-                strcpy(outbox[*outbox_count].target_ip, job_ips[i]);
-                outbox[*outbox_count].target_port = job_ports[i];
-                outbox[*outbox_count].target_fd = -1;
-                (*outbox_count)++;
-            }
-
-            if (*outbox_count < MAX_OUTBOX) {
-                sprintf(outbox[*outbox_count].message, "JOB_TIMEOUT %u\n", job_id);
-                outbox[*outbox_count].target_fd = owner_sockets[t];
-                (*outbox_count)++;
-            }
-
-            pthread_mutex_lock(&juani_mutex);
-            remove_owned_job(NODE, job_id);
-            pthread_mutex_unlock(&juani_mutex);
-        }
-
-        return;
     }
 
-    if (action == ACTION_NEW_NODE_DISCOVERED) {
-        // Le pasamos el datagrama para que guarde el nuevo nodo en su Hash Table
-        pthread_mutex_lock(&juani_mutex);
-        master_function(NODE, SENDER_IP, 0, SOCKET, BUFFER, juani_out, BUFFER_SIZE);
-        pthread_mutex_unlock(&juani_mutex);
-        return;
+    pthread_mutex_unlock(&NODE->lock_owned);
+}
+
+/**
+ * @brief Processes DENIED messages. Performs a rollback by releasing all previously 
+ * granted resources on other nodes and notifying Erlang of the failure.
+ */
+static void handle_denied(ServerContext *ctx, const char *buffer, out_msg_t *outbox, int *count) {
+    node_data_t NODE = (node_data_t)ctx->mynode;
+    unsigned job_id;
+    
+    if (sscanf(buffer, "DENIED %u", &job_id) != 1) return;
+
+    pthread_mutex_lock(&NODE->lock_owned);
+    
+    // 1. Extract successfully granted resources for rollback
+    char *ips[MAX_JOB_RESOURCES]; unsigned ports[MAX_JOB_RESOURCES], cants[MAX_JOB_RESOURCES];
+    resource_t types[MAX_JOB_RESOURCES];
+    unsigned n = get_granted_resources(NODE->owned_jobs, job_id, ips, ports, types, cants, MAX_JOB_RESOURCES);
+    
+    // 2. Dispatch RELEASE to all surviving nodes
+    for(unsigned i = 0; i < n; i++) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "RELEASE %u %s %u\n", job_id, (types[i]==CPU)?"cpu":(types[i]==RAM)?"mem":"gpu", cants[i]);
+        add_to_outbox(outbox, count, msg, -1, ips[i], ports[i]);
+    }
+    
+    // 3. Notify Erlang of total failure and clean up memory
+    char msg_deny[64];
+    snprintf(msg_deny, sizeof(msg_deny), "JOB_DENIED %u\n", job_id);
+    add_to_outbox(outbox, count, msg_deny, ctx->erlang_tcp_fd, NULL, 0);
+    remove_owned_job(NODE->owned_jobs, job_id);
+
+    pthread_mutex_unlock(&NODE->lock_owned);
+}
+
+/**
+ * @brief Handles RELEASE messages from remote nodes, freeing local resources 
+ * and potentially unlocking pending requests in the queue.
+ */
+static void handle_release(ServerContext *ctx, unsigned socket, const char *buffer, out_msg_t *outbox, int *count) {
+    node_data_t NODE = (node_data_t)ctx->mynode;
+    unsigned job_id, cant; char res[10];
+    
+    if (sscanf(buffer, "RELEASE %u %9s %u", &job_id, res, &cant) != 3) return;
+
+    pthread_mutex_lock(&NODE->lock_local);
+    
+    // 1. Reclaim local resources
+    del_active_job(NODE->resources, NODE->active_jobs, job_id, socket);
+    
+    // 2. Wake up queued requests if resources are now available
+    char msg[64];
+    unsigned queued_socket = 0;
+    
+    while (chk_job_request(NODE->resources, NODE->active_jobs, msg, sizeof(msg), &queued_socket) != -1) {
+        add_to_outbox(outbox, count, msg, queued_socket, NULL, 0);
     }
 
-    if (action == ACTION_DISCONNECTED) {
-        // Llamado a funcion juani que gestiona nodos muertos 
-        // tiene que borrar todas los jobs que esten relacionados a este nodo
-        // solo tengo como informacion el fd del mismo 
-        return;
-    }
+    pthread_mutex_unlock(&NODE->lock_local);
+}
 
-    // ----------------------------------------------------------------------
-    // 2. EVENTOS TCP Y PRE-PARSING DE MENSAJES (Erlang)
-    // ----------------------------------------------------------------------
-    if (action == ACTION_RESPOND && BUFFER != NULL) {
+/**
+ * @brief Handles JOB_RELEASE from local Erlang, signaling the successful termination 
+ * of a job and triggering the release of remote resources.
+ */
+static void handle_job_release(ServerContext *ctx, const char *buffer, out_msg_t *outbox, int *count) {
+    node_data_t NODE = (node_data_t)ctx->mynode;
+    unsigned job_id;
+    
+    if (sscanf(buffer, "JOB_RELEASE %u", &job_id) != 1) return;
+    
+    pthread_mutex_lock(&NODE->lock_owned);
+
+    // 1. Extract all remote nodes involved in this job
+    char *ips[MAX_JOB_RESOURCES]; unsigned ports[MAX_JOB_RESOURCES], cants[MAX_JOB_RESOURCES];
+    resource_t types[MAX_JOB_RESOURCES];
+    unsigned n = get_granted_resources(NODE->owned_jobs, job_id, ips, ports, types, cants, MAX_JOB_RESOURCES);
+    
+    // 2. Dispatch RELEASE messages to free them
+    for(unsigned i = 0; i < n; i++) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "RELEASE %u %s %u\n", job_id, (types[i]==CPU)?"cpu":(types[i]==RAM)?"mem":"gpu", cants[i]);
+        add_to_outbox(outbox, count, msg, -1, ips[i], ports[i]);
+    }
+    
+    remove_owned_job(NODE->owned_jobs, job_id);
+
+    pthread_mutex_unlock(&NODE->lock_owned);
+}
+
+
+/* ========================================================================= */
+/* HANDLERS - EVENTS & MAINTENANCE                                           */
+/* ========================================================================= */
+
+/**
+ * @brief Garbage Collector: Removes inactive nodes from 'known_nodes' and 
+ * performs rollbacks on any jobs affected by those dead nodes.
+ */
+static void handle_check_deadnodes(ServerContext *ctx, out_msg_t *outbox, int *count) {
+    node_data_t NODE = (node_data_t)ctx->mynode;
+    char *dead_ips[10]; unsigned dead_ports[10];
+    
+    pthread_mutex_lock(&NODE->lock_known);
+    unsigned dead_count = remove_inactive_nodes(NODE->known_nodes, dead_ips, dead_ports, 10);
+    pthread_mutex_unlock(&NODE->lock_known);
+
+    if(dead_count == 0)return;
+
+    pthread_mutex_lock(&NODE->lock_owned);
+
+    for (unsigned i = 0; i < dead_count; i++) {
+        unsigned affected_jobs[20];
+        unsigned affected_count = get_jobs_affected_by_dead_node(NODE->owned_jobs, dead_ips[i], dead_ports[i], affected_jobs, 20);
         
-        char * ext_ips[50];
-        unsigned ext_ports[50];
-        resource_t ext_types[50];
-        unsigned ext_amounts[50];
-
-        if (strncmp(BUFFER, "GET_NODES", 9) == 0) {
-            master_function(NODE, (char*)SENDER_IP, sender_port, SOCKET, BUFFER, juani_out, BUFFER_SIZE);
-            if (strlen(juani_out) > 0) {
-                strcpy(outbox[0].message, juani_out);
-                outbox[0].target_fd = SOCKET;
-                *outbox_count = 1;
+        for (unsigned j = 0; j < affected_count; j++) {
+            unsigned job_id = affected_jobs[j];
+            
+            // ROLLBACK: Release resources from surviving nodes
+            char *ips[MAX_JOB_RESOURCES]; unsigned ports[MAX_JOB_RESOURCES], cants[MAX_JOB_RESOURCES];
+            resource_t types[MAX_JOB_RESOURCES];
+            unsigned granted = get_granted_resources(NODE->owned_jobs, job_id, ips, ports, types, cants, MAX_JOB_RESOURCES);
+            
+            for(unsigned k=0; k<granted; k++) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "RELEASE %u %s %u\n", job_id, (types[k]==CPU)?"cpu":(types[k]==RAM)?"mem":"gpu", cants[k]);
+                add_to_outbox(outbox, count, msg, -1, ips[k], ports[k]);
             }
-            return;
-        }
-        // --- CASO A: JOB_REQUEST  ---
-        if (strncmp(BUFFER, "JOB_REQUEST", 11) == 0) {
-            unsigned job_id;
-            sscanf(BUFFER, "JOB_REQUEST %u", &job_id);
             
-            // agruega a su tabla hash
-            pthread_mutex_lock(&juani_mutex);
-            master_function(NODE, (char*)SENDER_IP, sender_port, SOCKET, BUFFER, juani_out, BUFFER_SIZE);
-
-            pthread_mutex_unlock(&juani_mutex);
-            append_next_reserve(NODE, job_id, SOCKET, outbox, outbox_count);
+            char msg_deny[64];
+            snprintf(msg_deny, sizeof(msg_deny), "JOB_DENIED %u\n", job_id);
+            add_to_outbox(outbox, count, msg_deny, ctx->erlang_tcp_fd, NULL, 0);
+            
+            remove_owned_job(NODE->owned_jobs, job_id);
         }
+        free(dead_ips[i]); // Clean up the memory allocated by the Yellow Pages GC
+
+        pthread_mutex_unlock(&NODE->lock_owned);
+    }
+}
+
+/**
+ * @brief Processes ANNOUNCE broadcasts from remote nodes to update the cluster directory.
+ */
+static void handle_node_announced(ServerContext *ctx, const char *sender_ip, const char *buffer) {
+    node_data_t NODE = (node_data_t)ctx->mynode;
+    
+    // Inicializamos en 0 por si algún recurso no viene en el string
+    unsigned port = 0, cpu = 0, ram = 0, gpu = 0;
+    
+    // Copiamos el buffer porque strtok modifica el string original
+    char *dup = strdup(buffer);
+    if (!dup) return;
+    
+    // 1. Extraemos "ANNOUNCE"
+    char *token = strtok(dup, " "); 
+    if (token != NULL && strcmp(token, "ANNOUNCE") == 0) {
         
-        // --- CASO B: JOB_RELEASE o DENIED  ---
-        else if (strncmp(BUFFER, "JOB_RELEASE", 11) == 0 || strncmp(BUFFER, "DENIED", 6) == 0) {
-            unsigned job_id;
-            sscanf(BUFFER, "%*s %u", &job_id);
+        // 2. Extraemos el puerto
+        token = strtok(NULL, " "); 
+        if (token != NULL) {
+            port = (unsigned)atoi(token);
             
-            // misma logica de arriba pero llamo a master cuando termino de extraer datos 
-            pthread_mutex_lock(&juani_mutex);
-            unsigned count = get_job_data(NODE, job_id, ext_ips, ext_ports, ext_types, ext_amounts, 50);
-            pthread_mutex_unlock(&juani_mutex);
-            int out_idx = 0;
-            for (unsigned i = 0; i < count; i++) {
-                char res_str[4];
-                if      (ext_types[i] == CPU) strcpy(res_str, "cpu");
-                else if (ext_types[i] == GPU) strcpy(res_str, "gpu");
-                else if (ext_types[i] == RAM) strcpy(res_str, "mem");
-
-                char directive_msg[BUFFER_SIZE];
-                if (strncmp(BUFFER, "JOB_RELEASE", 11)==0){
-                    sprintf(directive_msg, "RELEASE %u %s %u\n", job_id, res_str, ext_amounts[i]);
-                }else{
-                    sprintf(directive_msg, "DENIED %u\n", job_id);
-                }
-
-                if (is_local_ip(ext_ips[i]) && ext_ports[i] == local_agent_port) {
-                    if (strncmp(BUFFER, "JOB_RELEASE", 11)==0) {
-                        pthread_mutex_lock(&juani_mutex);
-                        master_function(NODE, ext_ips[i], ext_ports[i], SOCKET, directive_msg, juani_out, BUFFER_SIZE);
-                        pthread_mutex_unlock(&juani_mutex);
-                    }
-                    continue;
+            // 3. Iteramos sobre los recursos (pueden venir en cualquier orden)
+            token = strtok(NULL, " ");
+            while (token != NULL) {
+                if (strncmp(token, "cpu:", 4) == 0) {
+                    cpu = (unsigned)atoi(token + 4); // Leemos el número después de "cpu:"
+                } 
+                else if (strncmp(token, "mem:", 4) == 0 || strncmp(token, "ram:", 4) == 0) {
+                    ram = (unsigned)atoi(token + 4);
+                } 
+                else if (strncmp(token, "gpu:", 4) == 0) {
+                    gpu = (unsigned)atoi(token + 4);
                 }
                 
-                strcpy(outbox[out_idx].message, directive_msg);
-                strcpy(outbox[out_idx].target_ip, ext_ips[i]);
-                outbox[out_idx].target_port = ext_ports[i];
-                outbox[out_idx].target_fd = -1; 
-                out_idx++;
+                token = strtok(NULL, " "); // Siguiente recurso
             }
-            *outbox_count = out_idx;
-
-            // en este caso si es denied juani devueleve el mensaje para el erlang, sino es 
-            // job release solo borro datos
-            pthread_mutex_lock(&juani_mutex); 
-            master_function(NODE, (char*)SENDER_IP, sender_port, SOCKET, BUFFER, juani_out, BUFFER_SIZE);
-            pthread_mutex_unlock(&juani_mutex);
             
-            if(strncmp(BUFFER, "DENIED", 6) == 0){
-                strcpy(outbox[*outbox_count].message, juani_out);
-                outbox[*outbox_count].target_fd = SOCKET; 
-                (*outbox_count)++; 
-            }   
+            // 4. Actualizamos el directorio UDP de forma segura
+            if (port > 0) {
+                pthread_mutex_lock(&NODE->lock_known);
+                update_known_node(NODE->known_nodes, sender_ip, port, cpu, ram, gpu);
+                pthread_mutex_unlock(&NODE->lock_known);
+            }
         }
-        // --- CASO D: COMANDOS SIMPLES (GRANTED, RESERVE, JOB_GRANTED, GET_NODES) ---
-        else {
-            // GET_NODES_RESPUESTA INMEDIATA
-            // JOB_GRANTED SIN RESPUESTA
-            // GRANTED POSIBLE RESPUESTA DE LONGITUD 1 (JOB_GRANTED)
-            // RESERVE POSIBLE RESPUESTA DE LONGITUD 1 (GRANTED)
-            unsigned granted_job_id = 0;
-            int is_granted = (sscanf(BUFFER, "GRANTED %u", &granted_job_id) == 1);
+    }
+    
+    free(dup);
+}
 
-            pthread_mutex_lock(&juani_mutex);
-            master_function(NODE, (char*)SENDER_IP, sender_port, SOCKET, BUFFER, juani_out, BUFFER_SIZE);
-            pthread_mutex_unlock(&juani_mutex);
+/**
+ * @brief Extrae los recursos locales y genera el string ANNOUNCE para UDP.
+ */
+static void handle_get_resources(ServerContext *ctx, out_msg_t *outbox, int *count) {
+    node_data_t NODE = (node_data_t)ctx->mynode;
+    unsigned cpu, gpu, ram;
+    
+    // 1. Protegemos la lectura física
+    pthread_mutex_lock(&NODE->lock_local);
+    get_local_resources(NODE->resources, &cpu, &gpu, &ram);
+    pthread_mutex_unlock(&NODE->lock_local);
+    
+    // 2. Armamos el mensaje respetando el protocolo ANNOUNCE
+    char msg[128];
+    snprintf(msg, sizeof(msg), "ANNOUNCE %d cpu:%u mem:%u gpu:%u", ctx->port, cpu, ram, gpu);
+    
+    // 3. Lo metemos al outbox
+    add_to_outbox(outbox, count, msg, -1, NULL, 0);
+}
 
-            if (is_granted) {
-                unsigned owner_socket = get_job_owner_socket(NODE, granted_job_id);
-                if (strlen(juani_out) > 0) {
-                    strcpy(outbox[0].message, juani_out);
-                    outbox[0].target_fd = owner_socket;
-                    *outbox_count = 1;
-                } else {
-                    append_next_reserve(NODE, granted_job_id, owner_socket, outbox, outbox_count);
+
+/* ========================================================================= */
+/* MAIN DISPATCHER (ENTRY POINT)                                             */
+/* ========================================================================= */
+
+void resource_adapter_patch(ServerContext *ctx, char *SENDER_IP, unsigned SOCKET, const char *BUFFER, out_msg_t *outbox, int *outbox_count, JuaniAction action) {
+    
+    // Safety verification
+    if (!ctx || !ctx->mynode) return;
+    node_data_t NODE = (node_data_t)ctx->mynode;
+    
+    if (outbox_count != NULL) {
+    *outbox_count = 0;
+    }
+    
+    // Route based on event type
+    switch (action) {
+        case ACTION_GET_RESOURCES: 
+            handle_get_resources(ctx, outbox, outbox_count);
+            break;
+        
+        case ACTION_NEW_NODE_DISCOVERED:
+            if (BUFFER != NULL) handle_node_announced(ctx, SENDER_IP, BUFFER);
+            break;
+            
+        case ACTION_CHECK_DEADNODES:
+            handle_check_deadnodes(ctx, outbox, outbox_count);
+            break;
+            
+        case ACTION_DISCONNECTED:
+            // When a TCP socket disconnects, we immediately reclaim the local resources
+            // that the disconnected node was currently holding from us.
+            pthread_mutex_lock(&NODE->lock_local);
+            free_all_resources_from_socket(NODE->resources, NODE->active_jobs, SOCKET);
+            pthread_mutex_unlock(&NODE->lock_local);
+
+            // Get port from aux function
+            unsigned port = get_connection_port(SOCKET);
+
+            if (port > 0 && SENDER_IP != NULL) {
+                printf("[PATCHER] Instant TCP disconnect detected for %s:%u. Initiating rollback...\n", SENDER_IP, port);
+                
+                unsigned affected_jobs[20];
+                pthread_mutex_lock(&NODE->lock_owned);
+                unsigned affected_count = get_jobs_affected_by_dead_node(NODE->owned_jobs, SENDER_IP, port, affected_jobs, 20);
+                
+                for (unsigned j = 0; j < affected_count; j++) {
+                    unsigned job_id = affected_jobs[j];
+                    
+                    
+                    char *ips[MAX_JOB_RESOURCES]; unsigned ports[MAX_JOB_RESOURCES], cants[MAX_JOB_RESOURCES];
+                    resource_t types[MAX_JOB_RESOURCES];
+                    unsigned granted = get_granted_resources(NODE->owned_jobs, job_id, ips, ports, types, cants, MAX_JOB_RESOURCES);
+                    
+                    for(unsigned k = 0; k < granted; k++) {
+                        char msg[128];
+                        snprintf(msg, sizeof(msg), "RELEASE %u %s %u\n", job_id, (types[k]==CPU)?"cpu":(types[k]==RAM)?"mem":"gpu", cants[k]);
+                        add_to_outbox(outbox, outbox_count, msg, -1, ips[k], ports[k]);
+                    }
+                    
+                    char msg_deny[64];
+                    snprintf(msg_deny, sizeof(msg_deny), "JOB_DENIED %u\n", job_id);
+                    add_to_outbox(outbox, outbox_count, msg_deny, ctx->erlang_tcp_fd, NULL, 0);
+                    
+                    remove_owned_job(NODE->owned_jobs, job_id);
                 }
-                return;
+                pthread_mutex_unlock(&NODE->lock_owned);
             }
 
-            // Si la función de Juani nos devolvio algo para responder
-            if (strlen(juani_out) > 0) {
-                strcpy(outbox[0].message, juani_out);
-                outbox[0].target_fd = SOCKET; // Respuesta inmediata por el mismo FD
-                *outbox_count = 1;
-            }
-        }
+            break;
+            
+        case ACTION_RESPOND:
+            if (BUFFER == NULL) break;
+            
+            if      (strncmp(BUFFER, "GET_NODES", 9)    == 0) falta_un_caso;
+            else if (strncmp(BUFFER, "JOB_REQUEST", 11) == 0) handle_job_request(ctx, SOCKET, BUFFER, outbox, outbox_count);
+            else if (strncmp(BUFFER, "RESERVE", 7)      == 0) handle_reserve(ctx, SOCKET, BUFFER, outbox, outbox_count);
+            else if (strncmp(BUFFER, "GRANTED", 7)      == 0) handle_granted(ctx, SENDER_IP, get_connection_port(SOCKET), SOCKET, BUFFER, outbox, outbox_count);
+            else if (strncmp(BUFFER, "DENIED", 6)       == 0) handle_denied(ctx, BUFFER, outbox, outbox_count);
+            else if (strncmp(BUFFER, "RELEASE", 7)      == 0) handle_release(ctx, SOCKET, BUFFER, outbox, outbox_count);
+            else if (strncmp(BUFFER, "JOB_RELEASE", 11) == 0) handle_job_release(ctx, BUFFER, outbox, outbox_count);
+            break;
+            
+        default:
+            break;
     }
 }

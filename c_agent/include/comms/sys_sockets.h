@@ -53,7 +53,7 @@ int process_discovery_datagram(const int udpsockfd, char* buffer, const int buff
  * @param message      The null-terminated string to be broadcasted (e.g., "ANNOUNCE").
  * @return The number of bytes sent on success, or -1 on error.
  */
-ssize_t broadcast_announce(const char *source_ip, const int targetport, const char *message);
+ssize_t broadcast_announce(int sockfd, const int targetport, const char *message);
 
 /**
  * @brief Creates a non-blocking TCP listening socket bound to 

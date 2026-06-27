@@ -3,10 +3,12 @@ TARGET = c_agent
 CC = gcc
 CFLAGS = -Wall -Wextra -pthread -g
 
+# Si tus headers están en c_agent/include, esta línea es correcta
 INCLUDES = -Iinclude
 
 BUILD_DIR = c_build
 
+# 1. SOLO ARCHIVOS DE PRODUCCIÓN (Cero tests aquí para evitar choques de main)
 SRCS = main.c \
        src/comms/event_handler.c \
        src/comms/resource_adapter.c \
@@ -14,7 +16,10 @@ SRCS = main.c \
        src/comms/sys_epoll.c \
        src/comms/sys_socket.c \
        src/comms/thread_pool.c \
-       src/resources/node-structures.c \
+       src/resources/node_structures.c \
+       src/resources/local_resource.c \
+       src/resources/owned_jobs.c \
+       src/resources/known_nodes.c \
        src/resources/queues.c \
        src/resources/tablahash.c
 
@@ -30,13 +35,13 @@ $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
+# 2. Comando RUN actualizado con 6 parámetros: IP Port CPU GPU RAM Hilos
 run: $(TARGET)
-	./$(TARGET) 127.0.0.1 8001 4 3 8192
+	./$(TARGET) 127.0.0.1 8001 4 8192 1 4
 
-clean:
+clear:
 	rm -rf $(BUILD_DIR)
 	rm -f $(TARGET)
 
-clear: clean
 
 .PHONY: all run clear

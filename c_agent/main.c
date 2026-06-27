@@ -2,7 +2,7 @@
 #include "include/comms/server_types.h"
 #include "include/comms/event_handler.h"
 #include "include/comms/thread_pool.h"
-#include "include/resources/node-structures.h"
+#include "include/resources/node_structures.h"
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <stdlib.h>
@@ -10,36 +10,26 @@
 #include <signal.h> 
 #include <unistd.h>
 
-#define NUM_THREADS 4
-
-volatile sig_atomic_t server_running = 1;
-
-void handle_sigint(int sig) {
-    (void)sig; 
-    printf("\nShutting down...\n");
-    server_running = 0; // Rompe el bucle principal
-}
-
-// ./c_agent <ip> <puerto> <cpu> <gpu> <ram>
+/**
+ * @param argc program executable
+ * @param argv array with [ip, port, cpu, gpu, ram, num_threads]
+ * */ 
 int main(int argc, char *argv[]) {
-    // 1. Inicialización limpia y encapsulada
+    // Clean initialization
     ServerContext ctx;
     init_server(&ctx, argc, argv);
-    unsigned cpu = (unsigned)atoi(argv[3]);
-    unsigned gpu = (unsigned)atoi(argv[4]);
-    unsigned ram = (unsigned)atoi(argv[5]);
-    node_data_t my_node = node_init(cpu, gpu, ram);
+    node_data_t my_node = init_node((unsigned)atoi(argv[3]), (unsigned)atoi(argv[5]), (unsigned)atoi(argv[4]));
     ctx.mynode = my_node;
-    init_thread_pool(&ctx, NUM_THREADS);
-
-    //signal(SIGINT, handle_sigint);
+    init_thread_pool(&ctx, atoi(argv[6]));
+    // TODO: CERRAR DE FORMA LIMPIA EL SERVIDOR CERRANDO LOS
+    // FD Y NO MANDANDO SIGPIPE DE UNA CON CTRL + C
+    //signal(SIGINT, handle_sigint); 
 
     struct epoll_event events[MAX_EVENTS];
     printf("Starting c_agent PORT: %d IP: %s CPU: %u GPU: %u RAM: %u\n",
-           ctx.port, ctx.lan_ip, cpu, gpu, ram);
+           ctx.port, ctx.lan_ip, atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));
 
-    // 2. El bucle Event-Dispatcher (Sin lógica mezclada)
-    while(server_running) {
+    while(1) {
         int n_events = epoll_wait(ctx.epollfd, events, MAX_EVENTS, -1);
         
         for(int i = 0 ; i < n_events; i++) {
@@ -47,10 +37,11 @@ int main(int argc, char *argv[]) {
             uint32_t event_type = events[i].events;
 
             if (curr_fd == ctx.tcp_timerfd) {
+                // After 2 seconds we start to attend new incoming tcp messages
                 handle_tcp_timer_expiration(&ctx);
             } 
             else if (curr_fd == ctx.udp_timerfd) {
-                // Leemos el timer en main para destrabar el epoll
+                // Periodicall UDP announce
                 uint64_t exp;
                 read(ctx.udp_timerfd, &exp, sizeof(uint64_t));
                 
@@ -58,6 +49,8 @@ int main(int argc, char *argv[]) {
                 thread_pool_push_task(task);
             }
             else if (curr_fd == ctx.gc_timerfd) {
+                // REMOVER ESTO, PUEDO APROVECHAR LA LLAMADA
+                // PERIODICA DEL ANNOUNCE 
                 uint64_t exp;
                 read(ctx.gc_timerfd, &exp, sizeof(uint64_t));
                 
@@ -77,19 +70,14 @@ int main(int argc, char *argv[]) {
                     thread_pool_push_task(task);
                 }
                 if (event_type & EPOLLOUT) {
+                    // Sending message to an no related node needs 2 
+                    // epoll instances 
                     handle_connection_success(&ctx, curr_fd);
                 }
             }
         }
     }
-
-    thread_pool_destroy();
-    node_dest(my_node);
-    
-    close(ctx.epollfd);
-    close(ctx.tcp_public_fd);
-    close(ctx.erlang_tcp_fd);
-    close(ctx.udp_fd);
-
+    // con acciones de cerrar limpio queda por hacer
+    dest_node(my_node);
     return 0;
 }

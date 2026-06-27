@@ -42,6 +42,7 @@ receiver(Socket, JobSchedulerId) ->
         {ok, Packet} ->
             JobSchedulerId ! {packet_received, Packet},
             io:format("Packet received~n"),
+            event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "packet received", none),
             receiver(Socket, JobSchedulerId);
         {error, closed} ->
             io:format("error, closed~n"),

@@ -2,10 +2,29 @@
 #include "../../include/comms/sys_sockets.h"
 #include "../../include/comms/sys_epoll.h"
 #include "../../include/comms/server_types.h"
+#include "../../include/comms/resource_adapter.h"
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
+/**
+ * Active connections guarda todos los fd que estan abiertos, con una diferenciacion en especifico
+ * 
+ * Si nosotros nos conectamos a ellos (cliente) lo que sucede es que sacamos la ip y el puerto por su 
+ * respectivo announce. Entonces en la ubicacion de es fd guardamos la ip y el puerto y asi podemos hacer
+ * la diferenciacis 
+ * 
+ * Si ellos se conectaron a nosotros (servidor), no hay forma de conocer el puerto, sin embargo tenemos el socket
+ * por el que llego el mensaje y la ip. Con eso ya es mas que suficiente para responder con GRANTED o DENIED,
+ * deberiamos tener guardado el fd en el node-structures. 
+ * Entonces mi idea es que intente enviarle un mensaje y si no puede porque el fd esta cerrado o fallo simplemente
+ * ignora.
+ * 
+ * Cuando caiga, eventualmente este fd va a ser reasignado a un anueva direccion ip. Para eso guardo la ip, para compararla 
+ * y no enviarle un release o un granted al nodo equivocado. El caso en que falla es que justo el nuevo nodo levantado tenga
+ * la misma ip y distinto puerto 
+ * 
+ */
 ConnectionState active_connections[MAX_FDS];
 pthread_rwlock_t connections_lock = PTHREAD_RWLOCK_INITIALIZER;
 
@@ -33,7 +52,7 @@ pthread_rwlock_t connections_lock = PTHREAD_RWLOCK_INITIALIZER;
  * nadie puede consutlar la tabla
  * 
  * Lecturas :
- *  - handel cliente message con action == 1
+ *  - handle cliente message con action == 1
  *  - rearm epoll fd (TODO EL TIEMPO EN TODAS)
  * Escrituras:
  *  - handle new tcp connection para conec nuevas
@@ -44,6 +63,7 @@ pthread_rwlock_t connections_lock = PTHREAD_RWLOCK_INITIALIZER;
 */
 
 // the same for all tcp messages using an already connected socket
+
 
 void handle_tcp_timer_expiration(ServerContext* ctx) {
     uint64_t exp;
@@ -62,22 +82,22 @@ void handle_tcp_timer_expiration(ServerContext* ctx) {
 }
 
 void handle_udp_timer_expiration(ServerContext* ctx) {
-    uint64_t exp;
-    read(ctx->udp_timerfd, &exp, sizeof(uint64_t));
     
     // juani me tiene que pasar solamente un string con los recuros locales 
     // formtateado con la norma de announce
     out_msg_t outbox[1];
     int outbox_count = 0;
-    // we shall send the port on the socket parameter. Because master function need to know it
-    // in order to craft the message 
-    resource_adapter_patch(ctx->mynode, NULL, ctx->port, NULL, outbox, &outbox_count, ACTION_GET_RESOURCES);
     
-    ssize_t sent = broadcast_announce(ctx->lan_ip, UDP_PORT, outbox[0].message);
-    if (sent >= 0) {
-        printf("[UDP] Sent from %s: %s", ctx->lan_ip, outbox[0].message);
-    } else {
-        printf("[UDP] Failed to send ANNOUNCE from %s\n", ctx->lan_ip);
+
+    resource_adapter_patch(ctx, NULL, 0, NULL, outbox, &outbox_count, ACTION_GET_RESOURCES);
+    
+    if (outbox_count > 0) {
+        ssize_t sent = broadcast_announce(ctx->udp_fd, UDP_PORT, outbox[0].message);
+        if (sent >= 0) {
+            printf("[UDP] Sent from %s: %s\n", ctx->lan_ip, outbox[0].message);
+        } else {
+            printf("[UDP] Failed to send ANNOUNCE from %s\n", ctx->lan_ip);
+        }
     }
 }
 
@@ -86,16 +106,16 @@ void handle_incoming_discovery(ServerContext* ctx) {
     char sender_ip[16];
     
     if (process_discovery_datagram(ctx->udp_fd, buffer, BUFFER_SIZE, sender_ip) == 0) {
-        printf("[UDP %d] Received from %s: %s", ctx->udp_fd, sender_ip, buffer);
+        printf("[UDP] Received from %s: %s\n", sender_ip, buffer);
         // con esto le digo a juani que hay un nuevo nodo descubierto y en buffer le paso 
         // el announce del emisor y la ip en sender ip
-        out_msg_t dummy_outbox[1]; 
-        int dummy_count = 0;
-        resource_adapter_patch(ctx->mynode, sender_ip, 0, buffer, dummy_outbox, &dummy_count, ACTION_NEW_NODE_DISCOVERED);
+        resource_adapter_patch(ctx, sender_ip, 0, buffer, NULL, NULL, ACTION_NEW_NODE_DISCOVERED);
     }
 }
 
 void handle_new_tcp_connection(ServerContext* ctx, int server_fd) {
+    // ESTO ES CUANDO ALGUIEN QUE NO ESTA RELACIONADO ME QUIERE ENVIAR UN MENSAJE
+    // NO HAY FORMA DE OBTENER EL PUERTO SOLO ES POSIBLE EXTRAER EL FD
     char client_ip[16];
     int client_fd = accept_tcp_connection(server_fd, client_ip);
     
@@ -135,7 +155,8 @@ int handle_client_message(ServerContext* ctx, int curr_fd) {
         
 
         // Juani modifica el outbox segun si quiere responder o no, el lo decide
-        resource_adapter_patch(ctx->mynode, target_ip, curr_fd, recv_buffer, outbox, &outbox_count, ACTION_RESPOND);
+        // Aca podria mandar el puerto de quien lo envia, que es cero de que ellos se hayan conectado
+        resource_adapter_patch(ctx, target_ip, curr_fd, recv_buffer, outbox, &outbox_count, ACTION_RESPOND);
 
         // mandamos lo que nos dijo juani
         send_outbox(ctx, outbox, outbox_count);
@@ -147,7 +168,7 @@ int handle_client_message(ServerContext* ctx, int curr_fd) {
             printf("Unexpected disconnection (FD %d)\n", curr_fd);
         }
         
-        resource_adapter_patch(ctx->mynode, target_ip, curr_fd, NULL, outbox, &outbox_count, ACTION_DISCONNECTED);
+        resource_adapter_patch(ctx, target_ip, curr_fd, NULL, outbox, &outbox_count, ACTION_DISCONNECTED);
         send_outbox(ctx, outbox, outbox_count);
         
         remove_from_epoll_interest_list(ctx->epollfd, curr_fd);
@@ -179,7 +200,7 @@ void handle_connection_success(ServerContext* ctx, int curr_fd) {
         
         out_msg_t outbox[MAX_OUTBOX];
         int outbox_count = 0;
-        resource_adapter_patch(ctx->mynode, target_ip, curr_fd, "CONNECT_FAILED", outbox, &outbox_count, ACTION_DISCONNECTED);
+        resource_adapter_patch(ctx, target_ip, curr_fd, "CONNECT_FAILED", outbox, &outbox_count, ACTION_DISCONNECTED);
         send_outbox(ctx, outbox, outbox_count);
         
         // BAJA POR FALLO
@@ -222,7 +243,7 @@ void handle_gc_timer_expiration(ServerContext* ctx) {
     
     // juani revisa nodos 
     resource_adapter_patch(
-        ctx->mynode, 
+        ctx, 
         NULL,           // No hay IP
         -1,             // No hay socket
         NULL,           // No hay mensaje
@@ -268,7 +289,7 @@ void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count) {
                     pthread_rwlock_wrlock(&connections_lock);
                     active_connections[new_fd].is_active = 1;
                     strncpy(active_connections[new_fd].ip, outbox[i].target_ip, 16);
-                    active_connections[new_fd].port = outbox[i].target_port;
+                    active_connections[new_fd].port = outbox[i].target_port;  // ACA ES DONDE SE GUARDA EL PUERTO DE EL EMISOR
                     strncpy(active_connections[new_fd].pending_message, outbox[i].message, BUFFER_SIZE - 1);
                     active_connections[new_fd].pending_message[BUFFER_SIZE - 1] = '\0';
                     pthread_rwlock_unlock(&connections_lock);
@@ -298,8 +319,10 @@ int find_fd_by_ip_port(const char* target_ip, unsigned target_port) {
     return found_fd;
 }
 
+//REVISAR XDNT
 unsigned get_connection_port(int fd) {
     unsigned port = 0;
+    // if the fd is out of range
     if (fd < 0 || fd >= MAX_FDS) return 0;
 
     pthread_rwlock_rdlock(&connections_lock);

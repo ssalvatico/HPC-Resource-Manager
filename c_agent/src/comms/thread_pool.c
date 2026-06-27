@@ -27,7 +27,7 @@ static TaskQueue queue;
  *  
  */
 
-// Función interna que ejecutarán los hilos
+// One task per thread
 static void* worker_thread(void* arg) {
     ServerContext* ctx = (ServerContext*)arg;
     while(1) {
@@ -42,7 +42,7 @@ static void* worker_thread(void* arg) {
         queue.count--;
         pthread_mutex_unlock(&queue.lock);
 
-        // ¡El Switch que distribuye el trabajo!inc
+        // Distribuition task switch
         switch (current_task.type) {
             case TASK_TCP_CLIENT_MSG:
                 if(handle_client_message(ctx, current_task.fd))rearm_epoll_fd(ctx->epollfd, current_task.fd);

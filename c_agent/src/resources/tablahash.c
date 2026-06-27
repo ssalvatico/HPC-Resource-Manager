@@ -228,3 +228,18 @@ void tablahash_visitar(TablaHash tabla, FuncionVisitante show){
     }
   }
 }
+
+void tablahash_visitar_extra(TablaHash tabla, FuncionVisitanteExtra show, void * extra){
+  unsigned can = tabla -> capacidad;
+  CasillaHash * elems = tabla -> elems;
+  CasillaHash * elem;
+
+  for(unsigned idx = 0 ; idx < can ; idx++){
+    elem = elems + idx;
+    
+    // Si la casilla tiene un dato, llamamos a la función pasándole el dato Y nuestro contexto extra
+    if(elem -> dato != NULL){
+      show(elem -> dato, extra);
+    }
+  }
+}

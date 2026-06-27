@@ -100,4 +100,10 @@ void tablahash_eliminar(TablaHash tabla, void *dato);
  */
 void tablahash_visitar(TablaHash tabla, FuncionVisitante show);
 
+
+typedef void (*FuncionVisitanteExtra)(void * dato, void * extra);
+
+
+void tablahash_visitar_extra(TablaHash tabla, FuncionVisitanteExtra show, void * extra);
+
 #endif /* __TABLAHASH_H__ */
