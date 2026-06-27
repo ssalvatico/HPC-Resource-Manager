@@ -41,7 +41,7 @@ receiver(Socket, JobSchedulerId) ->
     case gen_tcp:recv(Socket, 0, infinity) of
         {ok, Packet} ->
             JobSchedulerId ! {packet_received, Packet},
-            io:format("Packet received~n"),
+            io:format("Packet received ~p ~n", [Packet]),
             receiver(Socket, JobSchedulerId);
         {error, closed} ->
             io:format("error, closed~n"),
