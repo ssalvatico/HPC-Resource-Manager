@@ -102,6 +102,8 @@ void del_active_job(local_resources_t * resources, active_jobs_t jobs, unsigned 
  */
 void del_pending_job_requests(local_resources_t * resources, unsigned job_id, unsigned socket);
 
+int release_job_request(local_resources_t * resources, active_jobs_t jobs, unsigned job_id, unsigned socket, unsigned quantity, resource_t type);
+
 /**
  * @brief Emergency cleanup: Reclaims all granted resources and deletes all queued requests 
  * originating from a specific socket. Used when a remote node abruptly disconnects.

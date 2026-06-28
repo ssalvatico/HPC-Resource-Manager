@@ -28,6 +28,39 @@
 ConnectionState active_connections[MAX_FDS];
 pthread_rwlock_t connections_lock = PTHREAD_RWLOCK_INITIALIZER;
 
+static int command_allowed(ConnectionKind kind, const char *message) {
+    char command[16];
+    if (sscanf(message, "%15s", command) != 1) return 0;
+
+    if (kind == CONNECTION_ERLANG) {
+        return strcmp(command, "GET_NODES") == 0 ||
+               strcmp(command, "JOB_REQUEST") == 0 ||
+               strcmp(command, "JOB_RELEASE") == 0;
+    }
+
+    if (kind == CONNECTION_AGENT) {
+        return strcmp(command, "RESERVE") == 0 ||
+               strcmp(command, "GRANTED") == 0 ||
+               strcmp(command, "DENIED") == 0 ||
+               strcmp(command, "RELEASE") == 0;
+    }
+
+    return 0;
+}
+
+static void dispatch_line(ServerContext *ctx, int fd, const char *ip, ConnectionKind kind, const char *message) {
+    if (!command_allowed(kind, message)) {
+        printf("[TCP] Discarded message from FD %d: %s", fd, message);
+        return;
+    }
+
+    out_msg_t outbox[MAX_OUTBOX];
+    int outbox_count = 0;
+    printf("Msg received (FD %d - IP: %s): %s", fd, ip, message);
+    resource_adapter_patch(ctx, (char *)ip, fd, message, outbox, &outbox_count, ACTION_RESPOND);
+    send_outbox(ctx, outbox, outbox_count);
+}
+
 /*
  *
  *  Las banderas de epolloneshot y epollout en el mismo evento
@@ -131,7 +164,11 @@ void handle_new_tcp_connection(ServerContext* ctx, int server_fd) {
         active_connections[client_fd].is_active = 1;
         strncpy(active_connections[client_fd].ip, client_ip, 16);
         active_connections[client_fd].port = 0;
+        active_connections[client_fd].kind = server_fd == ctx->tcp_public_fd ? CONNECTION_AGENT : CONNECTION_ERLANG;
         active_connections[client_fd].pending_message[0] = '\0';
+        active_connections[client_fd].receive_buffer[0] = '\0';
+        active_connections[client_fd].receive_length = 0;
+        active_connections[client_fd].discarding_line = 0;
         pthread_rwlock_unlock(&connections_lock);
         
         add_to_epoll_interest_list(ctx->epollfd, client_fd, EPOLLIN | EPOLLONESHOT);
@@ -140,28 +177,48 @@ void handle_new_tcp_connection(ServerContext* ctx, int server_fd) {
 
 int handle_client_message(ServerContext* ctx, int curr_fd) {
     char target_ip[16];
+    ConnectionKind kind;
     pthread_rwlock_rdlock(&connections_lock);
     strncpy(target_ip, active_connections[curr_fd].ip, 16);
+    kind = active_connections[curr_fd].kind;
     pthread_rwlock_unlock(&connections_lock);
     
     char recv_buffer[BUFFER_SIZE];
     ssize_t bytes_read = receive_tcp_message(curr_fd, recv_buffer, BUFFER_SIZE);
     
-    out_msg_t outbox[MAX_OUTBOX];
-    int outbox_count = 0;
-    
     if (bytes_read > 0) {
-        printf("Msg received (FD %d - IP: %s): %s\n", curr_fd, target_ip, recv_buffer);
-        
+        ConnectionState *connection = &active_connections[curr_fd];
+        for (ssize_t i = 0; i < bytes_read; i++) {
+            char ch = recv_buffer[i];
 
-        // Juani modifica el outbox segun si quiere responder o no, el lo decide
-        // Aca podria mandar el puerto de quien lo envia, que es cero de que ellos se hayan conectado
-        resource_adapter_patch(ctx, target_ip, curr_fd, recv_buffer, outbox, &outbox_count, ACTION_RESPOND);
+            if (connection->discarding_line) {
+                if (ch == '\n') connection->discarding_line = 0;
+                continue;
+            }
 
-        // mandamos lo que nos dijo juani
-        send_outbox(ctx, outbox, outbox_count);
+            if (ch == '\n') {
+                connection->receive_buffer[connection->receive_length++] = '\n';
+                connection->receive_buffer[connection->receive_length] = '\0';
+                dispatch_line(ctx, curr_fd, target_ip, kind, connection->receive_buffer);
+                connection->receive_length = 0;
+                connection->receive_buffer[0] = '\0';
+                continue;
+            }
+
+            if (connection->receive_length >= BUFFER_SIZE - 2) {
+                connection->receive_length = 0;
+                connection->receive_buffer[0] = '\0';
+                connection->discarding_line = 1;
+                printf("[TCP] Discarded oversized message from FD %d\n", curr_fd);
+                continue;
+            }
+
+            connection->receive_buffer[connection->receive_length++] = ch;
+        }
         return 1;
     } else if (bytes_read == 0 || bytes_read != -2) {
+        out_msg_t outbox[MAX_OUTBOX];
+        int outbox_count = 0;
         if (bytes_read == 0) {
             printf("Client disconnected (FD %d).\n", curr_fd);
         } else {
@@ -179,7 +236,11 @@ int handle_client_message(ServerContext* ctx, int curr_fd) {
         active_connections[curr_fd].is_active = 0;
         active_connections[curr_fd].ip[0] = '\0';
         active_connections[curr_fd].port = 0;
+        active_connections[curr_fd].kind = CONNECTION_UNKNOWN;
         active_connections[curr_fd].pending_message[0] = '\0';
+        active_connections[curr_fd].receive_buffer[0] = '\0';
+        active_connections[curr_fd].receive_length = 0;
+        active_connections[curr_fd].discarding_line = 0;
         pthread_rwlock_unlock(&connections_lock);
     }
     return 1;
@@ -208,7 +269,11 @@ void handle_connection_success(ServerContext* ctx, int curr_fd) {
         active_connections[curr_fd].is_active = 0;
         active_connections[curr_fd].ip[0] = '\0';
         active_connections[curr_fd].port = 0;
+        active_connections[curr_fd].kind = CONNECTION_UNKNOWN;
         active_connections[curr_fd].pending_message[0] = '\0';
+        active_connections[curr_fd].receive_buffer[0] = '\0';
+        active_connections[curr_fd].receive_length = 0;
+        active_connections[curr_fd].discarding_line = 0;
         pthread_rwlock_unlock(&connections_lock);
 
         remove_from_epoll_interest_list(ctx->epollfd, curr_fd);
@@ -290,8 +355,12 @@ void send_outbox(ServerContext* ctx, out_msg_t* outbox, int outbox_count) {
                     active_connections[new_fd].is_active = 1;
                     strncpy(active_connections[new_fd].ip, outbox[i].target_ip, 16);
                     active_connections[new_fd].port = outbox[i].target_port;  // ACA ES DONDE SE GUARDA EL PUERTO DE EL EMISOR
+                    active_connections[new_fd].kind = CONNECTION_AGENT;
                     strncpy(active_connections[new_fd].pending_message, outbox[i].message, BUFFER_SIZE - 1);
                     active_connections[new_fd].pending_message[BUFFER_SIZE - 1] = '\0';
+                    active_connections[new_fd].receive_buffer[0] = '\0';
+                    active_connections[new_fd].receive_length = 0;
+                    active_connections[new_fd].discarding_line = 0;
                     pthread_rwlock_unlock(&connections_lock);
                     
                     add_to_epoll_interest_list(ctx->epollfd, new_fd, EPOLLIN | EPOLLOUT);
