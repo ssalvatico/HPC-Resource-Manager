@@ -68,14 +68,22 @@ make runclient
 
 The scheduler connects to the C agent, retrieves the available nodes, and begins generating and scheduling jobs.
 
-To execute the scheduler in test mode:
+---
 
-```bash
-cd erlang
-make run_test
-```
+## Provided script for testing
 
 ---
+
+You can verify that no deadlock scenarios can occur with our implementation.
+git
+To run the test script
+```./test_deadlock.sh```
+
+To run the test script with providing parameters
+```./test_deadlock.sh 127.0.0.1 8000 8001 4 8192 1 2 4096 0```
+
+---
+
 
 ## Project Structure
 
