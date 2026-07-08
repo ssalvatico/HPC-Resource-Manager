@@ -1,0 +1,521 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{parskip}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta}
+\usetikzlibrary{fit}
+
+\geometry{margin=2cm}
+
+\definecolor{codebg}{rgb}{0.95,0.95,0.95}
+\definecolor{codegreen}{rgb}{0.1,0.5,0.1}
+\definecolor{codegray}{rgb}{0.4,0.4,0.4}
+\definecolor{codeblue}{rgb}{0.1,0.1,0.7}
+
+\lstdefinelanguage{Erlang}{
+  keywords={module,export,import,define,record,if,case,of,end,fun,receive,after,when,begin,try,catch,throw},
+  keywordstyle=\color{codeblue}\bfseries,
+  comment=[l]{\%},
+  commentstyle=\color{codegreen}\itshape,
+  stringstyle=\color{orange},
+  morestring=[b]",
+  sensitive=true
+}
+
+\lstset{
+  language=Erlang,
+  backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{gray},
+  numbers=left,
+  numberstyle=\tiny\color{codegray},
+  tabsize=2,
+  captionpos=b,
+  showstringspaces=false,
+  showspaces=false,
+  showtabs=false
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{R-322 --- Sistemas Operativos I}
+\lhead{Gestor de Recursos Distribuido HPC}
+\rfoot{Página \thepage}
+
+\title{\textbf{Gestor de Recursos Distribuido HPC}\\[0.3em]\normalsize R-322 --- Sistemas Operativos I}
+\author{
+Juan Ignacio Gorgo \\
+Camila Sarasúa \\
+Lucio Oviedo Dell'Orefice \\
+Santiago Salvático
+}
+\date{23 de junio de 2026}
+\usepackage{lmodern}
+\begin{document}
+
+\maketitle
+\thispagestyle{fancy}
+\tableofcontents
+\newpage
+
+%---------------------------------------------------------------
+\section{Descripción General del Proyecto}
+
+Este informe describe el diseño e implementación de un gestor de recursos distribuido para un clúster HPC simulado. Cada nodo consta de dos componentes cooperativos: un \textbf{Agente Gestor de Recursos} escrito en C, y un \textbf{Planificador de Trabajos (Job Scheduler)} escrito en Erlang. Los componentes se comunican a través de TCP en localhost, mientras que los agentes C se comunican entre sí a través de la red utilizando un protocolo ASCII común.
+
+El lado de Erlang es responsable de la generación de trabajos, la orquestación de solicitudes de recursos, la prevención de interbloqueos (deadlocks) y el registro de eventos. El lado de C gestiona los recursos locales, maneja conexiones concurrentes a través de \texttt{epoll} e implementa el descubrimiento de nodos basado en UDP.
+
+%---------------------------------------------------------------
+\section{Arquitectura del Componente Erlang}
+
+\subsection{Descripción General de los Módulos}
+
+El componente Erlang está estructurado en cuatro módulos con responsabilidades claramente separadas:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Módulo} & \textbf{Responsabilidad} \\
+\midrule
+\texttt{header.hrl}         & Macros compartidas, registros y constantes de ordenamiento de recursos \\
+\texttt{erlang\_c\_bridge}  & Gestión de conexiones TCP con el agente C local \\
+\texttt{job\_scheduler}     & Generación de trabajos, lógica de planificación y gestión de estado \\
+\texttt{event\_logger}      & Registro asíncrono de eventos en un archivo \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Arquitectura de Procesos}
+
+El sistema consta de dos componentes principales por nodo: un agente C y un planificador Erlang. El lado de Erlang utiliza el modelo de actores: cada unidad lógica se ejecuta como un proceso independiente que se comunica exclusivamente a través del paso de mensajes, sin memoria compartida. El agente C maneja toda la E/S de red utilizando \texttt{epoll}, delegando la lógica de recursos a módulos internos conectados a través de una interfaz bien definida.
+
+\begin{figure}[H]{
+\begin{tikzpicture}[
+  box/.style={
+      draw=black,
+      fill=blue!10,
+      rounded corners=5pt,
+      minimum width=3cm,
+      minimum height=1cm,
+      align=center
+  },
+  arr/.style={-{Latex}, thick}
+]
+
+\node[box] (receiver)   at (0,4)        {Receiver};
+\node[box] (sched)      at (-4.5,1)     {Job Scheduler};
+\begin{scope}[shift={(9,1)}]
+  \draw[draw=black, fill=blue!5, rounded corners=5pt] 
+    (-2.5,-2) rectangle (2.5,2);
+  \node[above, font=\small\bfseries] at (0,2) {C Agent};
+  
+  \node[box, minimum width=2.5cm, minimum height=0.7cm] (datastr)    at (0.6, 1.4)  {Data structures};
+  \node[box, minimum width=2.5cm, minimum height=0.7cm] (parser)   at (-1,0)  {Parser};
+  \node[box, minimum width=2.5cm, minimum height=0.7cm] (fdlist)    at (0.5,-1.3)  {File descriptor list};
+
+  \draw[arr] (parser)  -- node[left, font=\scriptsize, pos=0.6]{interface} (datastr);
+  \draw[arr] (datastr)  -- (parser);
+  \draw[arr] (datastr) -- node[right, font=\scriptsize]{temps} (fdlist);
+  \draw[arr] (fdlist) -- (datastr);
+  \draw[arr] (fdlist)  to[bend left=20] (parser);
+  \draw[arr] (parser)  to[bend right=20] (fdlist);
+\end{scope}
+
+\coordinate (agent) at (6.5,1);
+\node[box] (sender)     at (0,-2.3)     {Sender};
+\node[box] (logger)     at (0,0.9)      {Event Logger};
+\node[box] (udp)        at (5,-2.3)   	{UDP Broadcast Port};
+
+\draw[arr] (sched) to[bend right=20] node[left, font=\footnotesize] {directives}  (sender);
+\draw[arr] (receiver) to[bend right=20] node[left,font=\footnotesize] {packets}  (sched);
+\draw[arr] (receiver) -- node[left, font=\footnotesize]{logs} (logger);
+\draw[arr] (sched) -- node[above, font=\footnotesize] {logs} (logger);
+\draw[arr] (sender) to[bend right=20] node[left, font=\footnotesize] {TCP send}   (agent);
+\draw[arr] (sender) -- node[left, font=\footnotesize]{logs} (logger);
+\draw[arr] (agent) to[bend right=20] node[left, font=\footnotesize] {TCP recv}   (receiver);
+\draw[arr] (agent) -- node[right,font=\scriptsize, pos=0.8] {ANNOUNCE} (udp);
+\draw[arr] (udp) -- (agent);
+
+
+\end{tikzpicture}
+}
+\caption{System communication architecture: Erlang processes and C agent internals}
+\end{figure}
+
+\subsection{Convención del Entorno de Pruebas}
+
+Para simplificar las pruebas de interbloqueo sin las restricciones del ordenamiento global de recursos, se introdujo una convención para la variable de entorno \texttt{ENV}. Cuando \texttt{ENV} se establece en \texttt{"test"}, la función \texttt{generate\_job\_request} omite el paso de ordenamiento de recursos, permitiendo que los trabajos soliciten recursos en un orden arbitrario. Esto hace posible activar deliberadamente el escenario de interbloqueo descrito en la Sección 4 y verificar que el sistema lo detecte o se recupere de él.
+
+En producción (\texttt{ENV} sin establecer o con cualquier otro valor), siempre se aplica el ordenamiento global y el interbloqueo se previene estructuralmente.
+
+\subsection{Secuencia de Inicio}
+
+\subsection{Secuencia de Inicio del Agente C}
+
+El agente C se inicia con cinco argumentos: dirección IP, puerto TCP y los recursos disponibles de CPU, RAM y GPU. La secuencia de inicio es la siguiente:
+
+\begin{enumerate}
+    \item El \texttt{ServerContext} se inicializa con los argumentos proporcionados y se crea una nueva instancia de \texttt{epoll}.
+    \item Se abren tres sockets: un listener TCP público vinculado a la IP de la LAN del nodo, un listener TCP local vinculado exclusivamente a \texttt{127.0.0.1} para el planificador Erlang, y un socket UDP para el descubrimiento por difusión (broadcast).
+    \item Se configuran tres instancias de \texttt{timerfd}: un temporizador TCP de un solo disparo (2 segundos), un temporizador periódico de anuncios UDP (cada 1 segundo) y un temporizador periódico del recolector de basura (cada 5 segundos).
+    \item Los tres temporizadores y el socket UDP se registran en epoll. Los sockets TCP intencionalmente \textbf{no} se registran todavía.
+    \item Se inicializa un pool de hilos con 4 hilos de trabajo que comienzan a esperar tareas.
+    \item Comienza el bucle principal de epoll. Durante los primeros 2 segundos, solo se procesa tráfico UDP: el nodo difunde su presencia y recopila anuncios de pares que ya están en la red.
+    \item Cuando expira el temporizador TCP, ambos sockets TCP se añaden a epoll y el agente comienza a aceptar conexiones de otros agentes y del planificador Erlang local.
+\end{enumerate}
+
+Cuando se llama a \texttt{erlang\_c\_bridge:init/0}:
+
+\begin{enumerate}
+  \item Genera (spawns) el proceso \texttt{event\_logger} y lo registra bajo el átomo \texttt{eventLoggerId}.
+  \item Genera el proceso \texttt{job\_scheduler}.
+  \item Llama a \texttt{connect/3}, que intenta hasta \texttt{?TRIES} conexiones TCP al agente C.
+  \item En caso de éxito, genera \texttt{conn\_handler}, el cual genera a su vez \texttt{sender} y \texttt{receiver}, y notifica al planificador con sus PIDs.
+  \item Al agotarse los reintentos, registra el fallo en el log y llama a \texttt{erlang:halt/0}.
+\end{enumerate}
+
+%---------------------------------------------------------------
+\section{Protocolo de Comunicación}
+
+\subsection{Protocolo Inter-Agente (C a C)}
+
+Los agentes C se comunican directamente entre sí a través de TCP utilizando un protocolo ASCII orientado a líneas, donde cada mensaje termina con \texttt{\textbackslash n}. Este protocolo se utiliza para reservar y liberar recursos en nodos remotos.
+
+Mensajes enviados entre agentes:
+
+\begin{lstlisting}
+RESERVE <job_id> <resource_name> <amount>
+GRANTED <job_id>
+DENIED  <job_id>
+RELEASE <job_id> <resource_name> <amount>
+\end{lstlisting}
+
+Donde \texttt{job\_id} es un entero único generado por el planificador Erlang, \texttt{resource\_name} es uno de \texttt{cpu}, \texttt{mem} o \texttt{gpu}, y \texttt{amount} es la cantidad solicitada. El descubrimiento de nodos se maneja mediante difusión (broadcast) UDP. Cada agente anuncia periódicamente su presencia con:
+
+\begin{lstlisting}[language={}]
+ANNOUNCE <port> <cpu:N> <mem:N> <gpu:N>
+\end{lstlisting}
+
+La IP del remitente se extrae directamente de \texttt{recvfrom()} en lugar de incluirse en el mensaje. Si no se recibe ningún anuncio de un nodo dentro de los 15 segundos, se considera muerto y se elimina de la tabla de nodos conocidos.
+
+\subsection{Interfaz Local (Erlang a Agente C)}
+
+El proceso \texttt{sender} reenvía las directivas del planificador al agente C:
+
+\begin{lstlisting}
+GET_NODES
+JOB_REQUEST <job_id> @<ip>:<port>:<resource>:<amount> ...
+JOB_RELEASE <job_id>
+\end{lstlisting}
+
+El proceso \texttt{receiver} escucha en el mismo socket y reenvía las respuestas al planificador:
+
+\begin{lstlisting}
+NODES <ip>:<port>:<res>:<amount>:...;<ip>:...
+JOB_GRANTED <job_id>
+JOB_DENIED  <job_id>
+JOB_TIMEOUT <job_id>
+\end{lstlisting}
+
+\subsection{Diagrama de Secuencia: Ciclo de Vida de un Trabajo}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    font=\small,
+    proc/.style={
+        draw,
+        rounded corners,
+        fill=blue!10,
+        minimum width=2.8cm,
+        minimum height=0.8cm
+    },
+  msg/.style={
+        font=\footnotesize,
+        inner sep=2pt
+    },
+    arr/.style={
+        -{Latex},
+        thick
+    }
+]
+
+% Particpantes
+\node[proc] (ea) at (0,0.7) {Erlang A};
+\node[proc] (ca) at (5,0.7) {Agente C A};
+\node[proc] (cb) at (10,0.7) {Agente C B};
+
+% Líneas de vida
+\foreach \x in {0,5,10}
+    \draw[dashed] (\x,0) -- (\x,-12);
+
+% Solicitud de trabajo
+\draw[arr]
+    (0,-1.2) --
+    node[msg,above]
+    {JOB\_REQUEST 42}
+    node[msg,below]{A:cpu:2 B:gpu:1}
+    (5,-1.2);
+
+% Reserva local
+\draw[dashed]
+    (5,-2) --
+    node[msg,right]
+    {reservar cpu 2}
+    (5,-2.4);
+
+% Reserva remota
+\draw[arr]
+    (5,-3) --
+    node[msg,above]
+    {RESERVE gpu 1}
+    (10,-3);
+
+% Confirmación (Grant)
+\draw[arr]
+    (10,-4.5) --
+    node[msg,above]
+    {GRANTED 42}
+    (5,-4.5);
+
+% Notificación a Erlang
+\draw[arr]
+    (5,-6) --
+    node[msg,above]
+    {JOB\_GRANTED 42}
+    (0,-6);
+
+% Separador
+\draw[dotted, thick]
+    (-1,-7) -- (11,-7);
+
+\node[
+    draw,
+    rounded corners,
+    fill=yellow!15,
+    minimum width=2.5cm
+]
+at (5,-7)
+{el trabajo 42 se ejecuta};
+
+% Liberación
+\draw[arr]
+    (0,-8.5) --
+    node[msg,above]
+    {JOB\_RELEASE 42}
+    (5,-8.5);
+
+% Liberación local
+\draw[dashed]
+    (5,-9.2) --
+    node[msg,right]
+    {liberar cpu 2}
+    (5,-9.3);
+
+% Liberación remota
+\draw[arr]
+    (5,-10) --
+    node[msg,above]
+    {RELEASE gpu 1}
+    (10,-10);
+
+\end{tikzpicture}
+
+\caption{Ejecución y liberación exitosa de un trabajo.}
+\end{figure}
+\newpage
+%---------------------------------------------------------------
+\section{Estrategia de Prevención de Deadlocks}
+
+\subsection{Descripción del Problema}
+
+El deadlock distribuido ocurre cuando dos trabajos retienen cada uno un recurso que el otro necesita, formando una espera circular. El escenario clásico de la consigna:
+
+\begin{itemize}
+  \item \textbf{Job1} (del Nodo A): necesita 2 CPUs del Nodo A y 1 GPU del Nodo B.
+  \item \textbf{Job2} (del Nodo B): necesita 1 GPU del Nodo B y 2 CPUs del Nodo A.
+\end{itemize}
+
+Si ambos trabajos adquieren su primer recurso simultáneamente, cada uno se bloquea esperando el recurso retenido por el otro, lo que genera un deadlock.
+
+\subsection{Estrategia: Ordenamiento Global de Recursos}
+
+La estrategia elegida elimina la condición de \textbf{espera circular} (condición 4 de Coffman) al imponer un ordenamiento global en todas las solicitudes de recursos antes de enviarlas. Antes de enviar un \texttt{JOB\_REQUEST}, el planificador ordena la lista de recursos requeridos por el par \texttt{(NodeIp, ResourceType)} en orden ascendente. El orden de los tipos se define de forma centralizada en \texttt{header.hrl}:
+
+\begin{lstlisting}
+-define(RES_ORDER(Type),
+    case Type of
+        cpu -> 1;
+        mem -> 2;
+        gpu -> 3
+    end
+).
+\end{lstlisting}
+
+El ordenamiento se aplica en \texttt{generate\_job\_request/2}:
+
+\begin{lstlisting}
+SortedResources = lists:sort(
+    fun ({Ip1, Resource1, _}, {Ip2, Resource2, _}) ->
+        {Ip1, Resource1} =< {Ip2, Resource2}
+    end,
+    AvailableResources
+),
+\end{lstlisting}
+
+\subsection{Por Qué Funciona: Ejemplo Paso a Paso}
+
+Con el invariante de ordenamiento aplicado, el escenario de deadlock se resuelve de la siguiente manera:
+
+\begin{enumerate}
+  \item Tanto el Trabajo1 como el Trabajo2 ordenan sus listas de recursos. Dado que \texttt{A $<$ B} lexicográficamente, ambas listas comienzan con los recursos del Nodo A.
+  \item Ambos trabajos compiten primero por las CPUs del Nodo A. Uno gana; el otro espera en la cola FIFO del Nodo A.
+  \item El trabajo ganador (Trabajo1) luego solicita la GPU del Nodo B y la adquiere.
+  \item El Trabajo1 finaliza y libera ambos recursos. El Trabajo2 luego adquiere las CPUs del Nodo A, luego la GPU del Nodo B y se completa normalmente.
+\end{enumerate}
+
+El invariante clave es: \textit{ningún trabajo puede retener un recurso de un nodo ``posterior'' mientras espera un recurso de un nodo ``anterior''.} La espera circular es estructuralmente imposible.
+
+%---------------------------------------------------------------
+\section{Registro de Eventos (Event Logger)}
+
+\subsection{Diseño}
+
+El logger se ejecuta como un proceso Erlang dedicado, registrado bajo el átomo \texttt{eventLoggerId}. Cualquier módulo registra un evento llamando a:
+
+\begin{lstlisting}
+event_logger:log_event(Status, SrcMethod, Detail, JobInvolved)
+\end{lstlisting}
+
+Esto construye un registro \texttt{\#logInfo\{\}} y lo envía como un mensaje al logger, que lo escribe en \texttt{event\_logger.txt} en modo de adición (append) utilizando I/O de archivos nativa (\texttt{raw}).
+
+\subsection{Registro de Log (Log Record)}
+
+\begin{lstlisting}
+-record(logInfo, {
+    status,       % ok | error | close
+    src_method,   % {Modulo, Funcion}
+    detail,       % atom o string que describe el evento
+    job_involved, % entero job_id | none
+    timestamp     % {Hora, Min, Seg}
+}).
+\end{lstlisting}
+
+\subsection{Ejemplo de Salida}
+
+\begin{lstlisting}
+ok {erlang_c_bridge,init} initialization none {14,32,10}
+ok {erlang_c_bridge,connect} "CONNECTION SUCCESSFUL" none {14,32,10}
+ok {job_scheduler,init} "[job_scheduler] sender_pid received" none {14,32,11}
+ok {job_scheduler,init} "[job_scheduler] job_request" 5 {14,32,16}
+ok {job_scheduler,init} "[job_scheduler] job_granted" 5 {14,32,16}
+\end{lstlisting}
+
+\subsection{Justificación del Diseño}
+
+Registrar el logger bajo un átomo fijo evita tener que pasar el PID del logger a través de cada llamada a función. Cualquier proceso en el sistema puede registrar un evento en cualquier momento sin necesidad de mantener una referencia.
+
+%---------------------------------------------------------------
+\section{Contribuciones del Equipo}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Miembro} & \textbf{Contribuciones} \\
+\midrule
+{[Lucio Oviedo Dell'Orefice]} & Agente C: servidor epoll, manejo de TCP, E/S no bloqueante. \\\\
+{[Juan Ignacio Gorgo]} & Agente C: gestión de recursos, colas FIFO, lógica \\ &      GRANTED/DENIED. \\\\
+{[Camila Sarasúa]} & Erlang: planificador de trabajos, prevención de interbloqueos, \\ & máquina de estados de los trabajos. \\\\
+{[Santiago Salvático]} & Erlang: \texttt{erlang\_c\_bridge}, \texttt{event\_logger}, \texttt{header.hrl},\\ & documentación, integración. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Desafíos de Implementación}
+
+Durante el desarrollo del gestor de recursos distribuido, se identificaron y resolvieron varios problemas de implementación. Estos problemas influyeron tanto en el protocolo de comunicación como en la arquitectura interna del sistema.
+
+\subsection{Identificación de Agentes}
+
+Inicialmente, los agentes C se identificaban únicamente por su dirección IP. Este enfoque resultó insuficiente cuando se ejecutaban múltiples agentes en el mismo host, ya que diferentes nodos podían compartir la misma IP mientras escuchaban en puertos distintos. Para resolver este problema, los agentes se identificaron de forma única utilizando el par:
+
+\begin{center}
+\texttt{(IP, Puerto)}
+\end{center}
+
+Este identificador pasó a formar parte del descubrimiento de nodos, la comunicación remota y los mensajes de asignación de recursos, lo que permitió que múltiples agentes coexistieran en la misma máquina.
+
+\subsection{Propiedad de Recursos Remotos}
+
+A medida que el sistema evolucionó para admitir múltiples agentes, los recursos podían pertenecer a diferentes nodos. Una solicitud de trabajo podría requerir recursos distribuidos en varias máquinas. Por esta razón, los descriptores de recursos se ampliaron para incluir la información del nodo de destino. Por lo tanto, las operaciones de reserva y liberación se dirigen al agente remoto correcto, lo que garantiza que los recursos se asignen y liberen de manera consistente.
+
+\subsection{Interoperabilidad del Parser entre C y Erlang}
+
+La comunicación entre el agente C y el planificador Erlang expuso varios problemas de interoperabilidad. Inicialmente, algunos mensajes generados por el agente C contenían caracteres de nueva línea al final. Cuando Erlang intentaba convertir valores como:
+
+\begin{lstlisting}
+"1\n"
+\end{lstlisting}
+
+directamente en enteros, se producían fallos de análisis (parsing). El parser de Erlang se modificó para normalizar los campos entrantes usando \texttt{string:trim/1} antes de convertir los valores, mejorando la robustez frente a diferencias de formato.
+
+\subsection{Tráfico de Descubrimiento UDP}
+
+El mecanismo de descubrimiento distribuido se basa en anuncios periódicos de UDP entre agentes. Las primeras versiones utilizaban un intervalo de anuncio muy corto, lo que producía un tráfico de red innecesario y una salida de log excesiva. Además, los parámetros de inicio incorrectos ocasionalmente causaban mensajes de anuncio no válidos. El protocolo de descubrimiento se estabilizó aumentando el intervalo de difusión (broadcast) y estandarizando el formato del anuncio:
+
+\begin{lstlisting}
+ANNOUNCE <port> cpu:<cpu> mem:<memory> gpu:<gpu>
+\end{lstlisting}
+
+Esto redujo el ruido de la red manteniendo un descubrimiento de nodos confiable.
+
+%---------------------------------------------------------------
+\section{Problemas Encontrados y Soluciones}
+
+\subsection{Colisión de Job ID entre Nodos en la Misma IP}
+
+\textbf{Problema:} La asignación especifica que dos nodos pueden compartir la misma dirección IP siempre que utilicen puertos diferentes. Dado que el programador (scheduler) de Erlang de cada nodo genera IDs de trabajo de forma independiente utilizando \texttt{erlang:unique\_integer/1}, dos programadores en la misma IP pueden producir IDs de trabajo idénticos. Cuando un tercer agente recibe un mensaje \texttt{RESERVE 42 cpu 2}, no puede determinar qué nodo lo envió basándose únicamente en el ID de trabajo.
+
+\textbf{Solución:} El agente en C ya tiene acceso al descriptor de archivo (\texttt{fd}) de la conexión TCP entrante a través del parámetro \texttt{SOCKET} en \texttt{resource\_adapter\_patch}. Dado que el kernel garantiza que no hay dos conexiones activas que compartan el mismo \texttt{fd} dentro de un proceso, el par \texttt{(job\_id, fd)} es globalmente único:
+
+\begin{itemize}
+\item El \texttt{fd} identifica de forma única qué nodo envió el mensaje.
+\item Dentro de la misma conexión (\texttt{fd}), \texttt{erlang:unique\_integer} garantiza que el ID de trabajo nunca se repita.
+\end{itemize}
+
+La solución no requirió cambios en el protocolo de red: el \texttt{fd} ya está disponible en toda la tubería de manejo de eventos y solo fue necesario incorporarlo como parte de la clave de trabajo en la tabla de trabajos activos.
+
+\subsection{Cierre prematuro del socket}
+
+\textbf{Problema:} Cuando el proceso que abrió un socket TCP finaliza, Erlang cierra el socket automáticamente. Esto provocaba que la conexión se cayera cuando \texttt{conn\_handler} generaba procesos hijos y luego terminaba.
+
+\textbf{Solución:} El ID del socket se pasa directamente a los procesos \texttt{sender} (emisor) y \texttt{receiver} (receptor) en el momento de su creación. Dado que estos son procesos de larga duración, el socket permanece abierto durante toda la sesión.
+
+\subsection{Registro del ID del proceso de registro (Logger)}
+
+\textbf{Problema:} Pasar el PID del logger a través de cada llamada a función creaba "ruido" innecesario entre los módulos.
+
+\textbf{Solución:} El logger se registra bajo el átomo \texttt{eventLoggerId} mediante \texttt{register/2}. Todos los módulos envían mensajes de registro directamente al átomo.
+
+\subsection{Bloqueo de lectura TCP vs. paso de mensajes en Erlang}
+
+\textbf{Problema:} Un proceso bloqueado en \texttt{gen\_tcp:recv} con \texttt{{active, false}} no puede recibir mensajes de Erlang simultáneamente. La alternativa, \texttt{{active, true}}, entrega los datos TCP directamente al buzón del proceso; pero si el agente C envía mensajes más rápido de lo que el proceso los consume, el buzón puede agotar la memoria.
+
+\textbf{Solución:} Mantuvimos \texttt{{active, false}} y separamos el tráfico entrante y saliente en dos procesos dedicados:
+\begin{itemize}
+\item \texttt{receiver:} se bloquea en \texttt{gen\_tcp:recv} esperando las respuestas del agente C.
+\item \texttt{sender:} se bloquea en \texttt{receive} esperando las directivas del programador.
+\end{itemize}
+Cada proceso tiene una única responsabilidad de bloqueo, evitando ambos problemas.
+\end{document}
