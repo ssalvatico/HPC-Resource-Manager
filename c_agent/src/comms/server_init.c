@@ -9,7 +9,7 @@
 
 void init_server(ServerContext* ctx, int argc, char *argv[]) {
     if(argc != 7) {
-        fprintf(stderr, "Usage: %s <ip> <puerto> <cpu> <gpu> <ram> <num_threads>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <ip> <port> <cpu> <mem> <gpu> <num_threads>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
@@ -35,8 +35,8 @@ void init_server(ServerContext* ctx, int argc, char *argv[]) {
     //garbage collector
     ctx->gc_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
     struct itimerspec its_gc = {0};
-    its_gc.it_value.tv_sec = 1;    // Primer disparo en 5 segundos
-    its_gc.it_interval.tv_sec = 1;
+    its_gc.it_value.tv_sec = 5;    // Primer disparo en 5 segundos
+    its_gc.it_interval.tv_sec = 5;
 
     timerfd_settime(ctx->tcp_timerfd, 0, &its_tcp, NULL);
     timerfd_settime(ctx->udp_timerfd, 0, &its_udp, NULL);

@@ -319,7 +319,6 @@ int find_fd_by_ip_port(const char* target_ip, unsigned target_port) {
     return found_fd;
 }
 
-//REVISAR XDNT
 unsigned get_connection_port(int fd) {
     unsigned port = 0;
     // if the fd is out of range

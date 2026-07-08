@@ -26,8 +26,8 @@ int main(int argc, char *argv[]) {
     //signal(SIGINT, handle_sigint); 
 
     struct epoll_event events[MAX_EVENTS];
-    printf("Starting c_agent PORT: %d IP: %s CPU: %u GPU: %u RAM: %u\n",
-           ctx.port, ctx.lan_ip, atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));
+    printf("Starting c_agent PORT: %d IP: %s CPU: %u MEM: %u GPU: %u\n",
+           ctx.port, ctx.lan_ip, atoi(argv[3]), atoi(argv[5]), atoi(argv[4]));
 
     while(1) {
         int n_events = epoll_wait(ctx.epollfd, events, MAX_EVENTS, -1);
