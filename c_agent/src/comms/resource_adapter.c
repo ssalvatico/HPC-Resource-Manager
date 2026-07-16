@@ -49,7 +49,10 @@ static void handle_get_nodes_response(ServerContext *ctx, unsigned socket, out_m
     get_known_nodes_payload(NODE->known_nodes, msg, sizeof(msg));
     pthread_mutex_unlock(&NODE->lock_known);
 
-    add_to_outbox(outbox, count, msg, socket, NULL, 0);
+    char final_msg[BUFFER_SIZE];
+    snprintf(final_msg, sizeof(final_msg), "%s\n", msg);
+    
+    add_to_outbox(outbox, count, final_msg, socket, NULL, 0);
 }
 
 /**
