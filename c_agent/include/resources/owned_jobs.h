@@ -155,4 +155,16 @@ unsigned collect_timed_out_jobs(owned_jobs_t jobs, unsigned job_ids[], unsigned 
  */
 void remove_owned_job(owned_jobs_t jobs, unsigned job_id);
 
+/**
+ * @brief Retrieves all job IDs owned by a specific socket.
+ * Used for garbage collection when a local Erlang client crashes 
+ * or disconnects unexpectedly, leaving orphaned transactions.
+ * * @param jobs The hash table containing all owned jobs.
+ * @param socket The file descriptor of the disconnected client.
+ * @param orphaned_job_ids Array to store the found orphaned job IDs.
+ * @param max_size Maximum capacity of the array to prevent buffer overflows.
+ * @return unsigned The number of orphaned jobs found.
+ */
+unsigned get_jobs_by_owner_socket(owned_jobs_t jobs, unsigned socket, unsigned orphaned_job_ids[], unsigned max_size);
+
 #endif

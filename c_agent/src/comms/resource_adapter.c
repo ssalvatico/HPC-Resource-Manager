@@ -264,6 +264,16 @@ static void handle_check_deadnodes(ServerContext *ctx, out_msg_t *outbox, int *c
     pthread_mutex_unlock(&NODE->lock_known);
 
     for (unsigned i = 0; i < dead_count; i++) {
+
+        int zombie_fd = find_fd_by_ip_port(dead_ips[i], dead_ports[i]);
+        
+        // Free given local resources 
+        if (zombie_fd != -1) {
+            pthread_mutex_lock(&NODE->lock_local);
+            free_all_resources_from_socket(NODE->resources, NODE->active_jobs, zombie_fd);
+            pthread_mutex_unlock(&NODE->lock_local);
+        }
+    
         pthread_mutex_lock(&NODE->lock_owned);
         unsigned affected_jobs[20];
         unsigned affected_count = get_jobs_affected_by_dead_node(NODE->owned_jobs, dead_ips[i], dead_ports[i], affected_jobs, 20);
@@ -421,13 +431,47 @@ void resource_adapter_patch(ServerContext *ctx, char *SENDER_IP, unsigned SOCKET
             break;
             
         case ACTION_DISCONNECTED:
-            // When a TCP socket disconnects, we immediately reclaim the local resources
-            // that the disconnected node was currently holding from us.
+
+            // 1. LOCAL RESOURCES RECLAMATION
+            // If the dead socket was holding any of our physical resources, take them back.
             pthread_mutex_lock(&NODE->lock_local);
             free_all_resources_from_socket(NODE->resources, NODE->active_jobs, SOCKET);
             pthread_mutex_unlock(&NODE->lock_local);
 
-            // Get port from aux function
+
+            // 2. HEADLESS NODE RECOVERY (ORPHANED ERLANG CLEANUP)
+            // Check if this dead socket was coordinating jobs (a local Erlang client).
+            unsigned orphaned_jobs[50];
+            pthread_mutex_lock(&NODE->lock_owned);
+            unsigned orphan_count = get_jobs_by_owner_socket(NODE->owned_jobs, SOCKET, orphaned_jobs, 50);
+
+            if (orphan_count > 0) {
+                printf("[PATCHER] Local Erlang client (FD %u) disconnected. Cleaning %u orphaned jobs...\n", SOCKET, orphan_count);
+                
+                for (unsigned i = 0; i < orphan_count; i++) {
+                    unsigned job_id = orphaned_jobs[i];
+                    char *ips[MAX_JOB_RESOURCES]; unsigned ports[MAX_JOB_RESOURCES], cants[MAX_JOB_RESOURCES];
+                    resource_t types[MAX_JOB_RESOURCES];
+                    
+                    // Extract resources that were successfully granted by remote nodes
+                    unsigned granted = get_granted_resources(NODE->owned_jobs, job_id, ips, ports, types, cants, MAX_JOB_RESOURCES);
+                    
+                    // Dispatch RELEASE messages to free remote network resources
+                    for (unsigned j = 0; j < granted; j++) {
+                        char msg[128];
+                        snprintf(msg, sizeof(msg), "RELEASE %u %s %u\n", job_id, (types[j]==CPU)?"cpu":(types[j]==RAM)?"mem":"gpu", cants[j]);
+                        add_to_outbox(outbox, outbox_count, msg, -1, ips[j], ports[j]);
+                    }
+                    
+                    // Purge the orphaned job from local memory
+                    remove_owned_job(NODE->owned_jobs, job_id);
+                }
+            }
+            pthread_mutex_unlock(&NODE->lock_owned);
+
+
+            // 3. REMOTE NODE DEATH CLEANUP
+            // If the dead socket was a remote cluster node, rollback jobs affected by its death.
             unsigned port = get_connection_port(SOCKET);
 
             if (port > 0 && SENDER_IP != NULL) {
@@ -447,6 +491,12 @@ void resource_adapter_patch(ServerContext *ctx, char *SENDER_IP, unsigned SOCKET
                     unsigned owner_socket = get_job_owner_socket(NODE->owned_jobs, job_id);
                     
                     for(unsigned k = 0; k < granted; k++) {
+
+                        // dont send realease to a dead nodes
+                        if (strcmp(ips[k], SENDER_IP) == 0 && ports[k] == port) {
+                            continue; 
+                        }
+
                         char msg[128];
                         snprintf(msg, sizeof(msg), "RELEASE %u %s %u\n", job_id, (types[k]==CPU)?"cpu":(types[k]==RAM)?"mem":"gpu", cants[k]);
                         add_to_outbox(outbox, outbox_count, msg, -1, ips[k], ports[k]);

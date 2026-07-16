@@ -283,3 +283,43 @@ unsigned collect_timed_out_jobs(owned_jobs_t jobs, unsigned job_ids[], unsigned 
     tablahash_visitar_extra(jobs, check_timeout_job, &ctx);
     return ctx.count;
 }
+
+/* ========================================================================= */
+/* ORPHANED CLIENT CLEANUP (HEADLESS NODE RECOVERY)                          */
+/* ========================================================================= */
+
+/**
+ * @brief Temporary context for the orphaned jobs visitor.
+ * Safely passes search parameters into the hash table traversal.
+ */
+typedef struct {
+    unsigned dead_socket;
+    unsigned * orphaned_jobs;
+    unsigned count;
+    unsigned max;
+} orphan_ctx_t;
+
+// Visitor function executed for each job in the hash table
+static void check_orphaned_jobs(void * dato, void * extra) {
+    elem_owned_job_t * job = (elem_owned_job_t *)dato;
+    orphan_ctx_t * ctx = (orphan_ctx_t *)extra;
+
+    // Abort if we reach the maximum array size
+    if (ctx->count >= ctx->max) return;
+
+    // If this job was requested by the Erlang client that just died
+    if (job->owner_socket == ctx->dead_socket) {
+        ctx->orphaned_jobs[ctx->count] = job->job_id;
+        ctx->count++;
+    }
+}
+
+unsigned get_jobs_by_owner_socket(owned_jobs_t jobs, unsigned socket, unsigned orphaned_job_ids[], unsigned max_size) {
+    // Pack the search parameters into the context
+    orphan_ctx_t ctx = {socket, orphaned_job_ids, 0, max_size};
+    
+    // Leverage the custom visitor to avoid global variables (Thread-Safe)
+    tablahash_visitar_extra(jobs, check_orphaned_jobs, &ctx);
+    
+    return ctx.count;
+}

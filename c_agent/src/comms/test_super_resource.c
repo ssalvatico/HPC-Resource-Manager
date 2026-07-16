@@ -14,10 +14,18 @@
 // Simulamos la tabla de puertos de event_handler.c
 unsigned mock_ports[1024] = {0};
 
-// Sobrescribimos la función que el adapter espera de event_handler.c
+// Sobrescribimos las funciones que el adapter espera de event_handler.c
 unsigned get_connection_port(int fd) {
     if (fd >= 0 && fd < 1024) return mock_ports[fd];
     return 0;
+}
+
+int find_fd_by_ip_port(const char* target_ip, unsigned target_port) {
+    // En nuestro entorno simulado, buscamos qué FD tiene asignado ese puerto
+    for (int i = 0; i < 1024; i++) {
+        if (mock_ports[i] == target_port) return i;
+    }
+    return -1;
 }
 
 /* ========================================================================= */
@@ -157,6 +165,63 @@ int main() {
     assert_cond(count == 1 && strcmp(outbox[0].message, "DENIED 402\n") == 0 && outbox[0].target_fd == 22, "E5. Una reserva imposible recibe DENIED");
 
     /* -------------------------------------------------------------------------
+    TEST G: ERLANG CLIENT CRASH (Headless Node Rollback)
+       ------------------------------------------------------------------------- */
+    printf("\n\033[1;36m>>> TEST G: Desconexion del Cliente Erlang (Nodo Huerfano)\033[0m\n");
+    
+    // 1. Un nuevo cliente Erlang (FD 99) pide el Job 500
+    resource_adapter_patch(&ctx, "127.0.0.1", 99, 
+        "JOB_REQUEST 500 @192.168.1.10:8010:cpu:2 @192.168.1.12:8012:ram:1024", outbox, &count, ACTION_RESPOND);
+    
+    // 2. El Nodo 1 (FD 10) responde rápido y acepta (GRANTED)
+    mock_ports[10] = 8010;
+    resource_adapter_patch(&ctx, "192.168.1.10", 10, "GRANTED 500", outbox, &count, ACTION_RESPOND);
+    
+    // 3. ERLANG CRASHEA (FD 99 se desconecta)
+    resource_adapter_patch(&ctx, "127.0.0.1", 99, NULL, outbox, &count, ACTION_DISCONNECTED);
+    
+    assert_cond(count == 1, "G1. El crash de Erlang genero exactamente 1 mensaje de RELEASE");
+    assert_cond(strstr(outbox[0].message, "RELEASE 500 cpu 2") && strcmp(outbox[0].target_ip, "192.168.1.10") == 0, "G2. Se libero correctamente la memoria secuestrada en el Nodo 1");
+
+    unsigned owner_check = get_job_owner_socket(((node_data_t)ctx.mynode)->owned_jobs, 500);
+    assert_cond(owner_check == 0, "G3. El Job 500 fue borrado completamente de la memoria interna (purga exitosa)");
+
+    /* -------------------------------------------------------------------------
+       TEST H: CRASH PREMATURO (Erlang muere sin tener recursos)
+       ------------------------------------------------------------------------- */
+    printf("\n\033[1;36m>>> TEST H: Crash Prematuro (Erlang muere en peticion)\033[0m\n");
+    
+    // Erlang (FD 88) pide el Job 600
+    resource_adapter_patch(&ctx, "127.0.0.1", 88, 
+        "JOB_REQUEST 600 @192.168.1.10:8010:cpu:1", outbox, &count, ACTION_RESPOND);
+    
+    // Erlang crashea INMEDIATAMENTE ANTES de que el nodo .10 responda
+    resource_adapter_patch(&ctx, "127.0.0.1", 88, NULL, outbox, &count, ACTION_DISCONNECTED);
+    
+    assert_cond(count == 0, "H1. Como no habia recursos secuestrados, no se envio ningun RELEASE a la red (0 trafico basura)");
+    unsigned owner_check_600 = get_job_owner_socket(((node_data_t)ctx.mynode)->owned_jobs, 600);
+    assert_cond(owner_check_600 == 0, "H2. El Job 600 fue purgado de la memoria para evitar deadlocks");
+
+    /* -------------------------------------------------------------------------
+       TEST I: MUERTE DEL PROVEEDOR (Erlang sigue vivo)
+       ------------------------------------------------------------------------- */
+    printf("\n\033[1;36m>>> TEST I: Muerte repentina de un nodo proveedor\033[0m\n");
+    
+    // Erlang (FD 77) pide el Job 700
+    resource_adapter_patch(&ctx, "127.0.0.1", 77, 
+        "JOB_REQUEST 700 @192.168.1.25:8025:gpu:1 @192.168.1.26:8026:ram:100", outbox, &count, ACTION_RESPOND);
+    
+    // El Nodo .25 (FD 25) acepta dar la GPU
+    mock_ports[25] = 8025;
+    resource_adapter_patch(&ctx, "192.168.1.25", 25, "GRANTED 700", outbox, &count, ACTION_RESPOND);
+    
+    // El Nodo .25 (FD 25) SE LE CORTA LA LUZ. Cae su TCP.
+    resource_adapter_patch(&ctx, "192.168.1.25", 25, NULL, outbox, &count, ACTION_DISCONNECTED);
+    
+    assert_cond(count == 1, "I1. Se genero una accion compensatoria");
+    assert_cond(strcmp(outbox[0].message, "JOB_DENIED 700\n") == 0 && outbox[0].target_fd == 77, "I2. Se informo JOB_DENIED al cliente Erlang para que sepa que la red fallo");
+
+    /* -------------------------------------------------------------------------
        TEST F: LIMPIEZA TOTAL DE MEMORIA
        ------------------------------------------------------------------------- */
     printf("\n\033[1;36m>>> TEST F: Apagado del Servidor\033[0m\n");
@@ -170,6 +235,5 @@ int main() {
         printf(" \033[0;31mFALLARON %d TESTS.\033[0m\n", errores_test);
     }
     printf("==============================================================\n");
-
     return 0;
 }
