@@ -518,4 +518,176 @@ La solución no requirió cambios en el protocolo de red: el \texttt{fd} ya est�
 \item \texttt{sender:} se bloquea en \texttt{receive} esperando las directivas del programador.
 \end{itemize}
 Cada proceso tiene una única responsabilidad de bloqueo, evitando ambos problemas.
+
+\section{Estructuras de Datos}
+
+En primera instancia, nos hemos abstraído de la estructura del nodo particionándola en tres módulos:
+ 
+\begin{itemize}
+    \item \textbf{Nodos conocidos} \texttt{(known\_nodes)}
+    \item \textbf{Recursos locales} \texttt{(local\_resources)}
+    \item \textbf{Cargas de trabajo propias} \texttt{(owned\_jobs)}
+\end{itemize}
+ 
+Cada uno de estos módulos está protegido por su propio lock, el cual es manipulado por el modulo \texttt{resource\_adapter.c}  
+ 
+A continuación se detalla en qué consiste cada uno de ellos.
+ 
+\subsection{Nodos conocidos}
+ 
+Como el nombre del módulo \texttt{known\_nodes} indica, este módulo implementa el directorio de nodos conocidos dentro del clúster distribuido. Su objetivo es mantener actualizada la información de todos los agentes descubiertos mediante mensajes UDP \texttt{ANNOUNCE}, permitiendo que el sistema conozca qué nodos están disponibles, qué recursos poseen, y eliminando automáticamente aquellos que dejan de responder.
+ 
+\paragraph{Estructura principal.}
+La estructura principal del módulo es \texttt{elem\_known\_nodes\_t}, que representa un único nodo remoto del clúster. Cada instancia almacena la siguiente información:
+ 
+\begin{itemize}
+    \item \textbf{Dirección IP} (\texttt{node\_ip}): identifica la máquina remota.
+    \item \textbf{Puerto TCP} (\texttt{node\_port}): puerto donde el agente escucha conexiones.
+    \item \textbf{Recursos disponibles} (\texttt{avail[RES\_NUM]}): arreglo que almacena la cantidad disponible de CPU, RAM y GPU reportada por el último mensaje \texttt{ANNOUNCE}.
+    \item \textbf{Marca temporal} (\texttt{time\_stamp}): instante en el que se recibió el último anuncio del nodo, utilizada para detectar nodos inactivos.
+\end{itemize}
+ 
+El conjunto de estas estructuras se almacena en una tabla hash genérica (\texttt{TablaHash}), denominada \texttt{known\_nodes\_t}. La tabla utiliza como clave la combinación \texttt{(IP, Puerto)}, lo que permite distinguir correctamente varios agentes ejecutándose sobre una misma máquina. Para ello se implementan funciones específicas de comparación (\texttt{comp\_known\_node}) y de hash (\texttt{hash\_known\_node}).
+ 
+\paragraph{Operaciones del módulo.}
+El módulo ofrece operaciones para:
+ 
+\begin{itemize}
+    \item Crear y destruir el directorio de nodos.
+    \item Actualizar o insertar un nodo cuando se recibe un nuevo mensaje \texttt{ANNOUNCE}, reemplazando automáticamente la información anterior y renovando su marca temporal.
+    \item Generar el mensaje \texttt{NODES}, recorriendo la tabla hash mediante el patrón \emph{visitor} para construir dinámicamente la lista de nodos y sus recursos disponibles.
+    \item Eliminar nodos inactivos, detectando aquellos cuyo tiempo sin anuncios supera el límite establecido (\texttt{ANNOUNCE\_TIMEOUT}). Durante este proceso también se devuelve la lista de nodos eliminados para que otros módulos puedan liberar o cancelar los trabajos asociados.
+\end{itemize}
+ 
+\subsection{Recursos locales}
+ 
+El módulo \texttt{local\_resource} administra los recursos físicos del nodo local y controla el ciclo de vida de las solicitudes de reserva realizadas por los nodos remotos. Su responsabilidad principal es decidir si una petición de recursos puede satisfacerse inmediatamente, debe quedar en espera, o debe ser rechazada, manteniendo en todo momento un registro consistente de los recursos disponibles y de las asignaciones activas.
+ 
+\paragraph{Estructuras principales.}
+Para ello emplea dos estructuras principales:
+ 
+\begin{itemize}
+    \item \textbf{\texttt{elem\_active\_job\_t}}, que representa una reserva de recursos ya concedida. Cada elemento almacena:
+    \begin{itemize}
+        \item el identificador del trabajo (\texttt{job\_id}),
+        \item el socket asociado al nodo remoto (\texttt{socket}),
+        \item la cantidad de recursos asignados (\texttt{resource\_quantity}),
+        \item el tipo de recurso reservado (\texttt{resource\_type}: CPU, GPU o RAM).
+    \end{itemize}
+ 
+    Estas estructuras se almacenan en una tabla hash (\texttt{active\_jobs\_t}), cuya clave está formada por la combinación \texttt{(job\_id, socket, resource\_type)}, permitiendo identificar de manera única cada reserva activa.
+ 
+    \item \textbf{\texttt{elem\_job\_request\_t}}, que representa una solicitud pendiente de recursos cuando el nodo no dispone de capacidad suficiente para satisfacerla inmediatamente. Contiene la misma información que un trabajo activo (identificador, socket, cantidad y tipo de recurso), pero estas estructuras se almacenan en colas FIFO independientes para cada tipo de recurso, garantizando que las solicitudes se atiendan en orden de llegada.
+\end{itemize}
+ 
+La estructura \texttt{local\_resources\_t} (definida en el archivo de cabecera) mantiene el estado general del nodo, almacenando:
+ 
+\begin{itemize}
+    \item la cantidad total de recursos físicos (\texttt{total}),
+    \item la cantidad actualmente disponible (\texttt{avail}),
+    \item una cola de espera (\texttt{request\_queue}) para cada tipo de recurso.
+\end{itemize}
+ 
+\paragraph{Funcionalidades principales.}
+El módulo implementa las siguientes funcionalidades principales:
+ 
+\begin{itemize}
+    \item Inicializar y destruir la estructura que representa los recursos físicos del nodo.
+    \item Registrar nuevas solicitudes de recursos, concediéndolas inmediatamente cuando existe disponibilidad o encolándolas en caso contrario.
+    \item Liberar recursos cuando un trabajo finaliza, actualizando el inventario del nodo.
+    \item Revisar periódicamente las colas de espera para determinar si alguna solicitud pendiente puede ser satisfecha tras la liberación de recursos.
+    \item Eliminar automáticamente todas las reservas y solicitudes asociadas a un nodo que se haya desconectado, evitando pérdidas permanentes de recursos y situaciones de bloqueo del sistema.
+\end{itemize}
+ 
+\paragraph{Estructuras de datos empleadas.}
+Desde el punto de vista de las estructuras de datos, el módulo utiliza:
+ 
+\begin{itemize}
+    \item \textbf{Tabla hash}, para almacenar y acceder eficientemente a las reservas activas.
+    \item \textbf{Colas FIFO}, para administrar las solicitudes pendientes respetando el orden de llegada.
+\end{itemize}
+ 
+\subsection{Cargas de trabajo propias}
+ 
+El módulo \texttt{owned\_jobs} administra los trabajos generados por el planificador Erlang local. Su función es mantener un seguimiento completo del estado de cada trabajo distribuido, registrando qué recursos fueron solicitados a cada nodo remoto, cuáles ya fueron concedidos y cuáles continúan pendientes. De esta manera, actúa como el coordinador del ciclo de vida de los trabajos iniciados por el nodo local.
+ 
+\paragraph{Estructura principal.}
+La estructura principal del módulo es \texttt{owned\_jobs\_t}, implementada como una tabla hash (\texttt{TablaHash}) cuyos elementos representan un trabajo distribuido identificado de forma única por su \texttt{job\_id}. Cada trabajo almacena toda la información necesaria para coordinar las reservas realizadas sobre distintos nodos del clúster.
+ 
+Para cada trabajo se registran:
+ 
+\begin{itemize}
+    \item \textbf{Identificador del trabajo} (\texttt{job\_id}), generado por el planificador Erlang.
+    \item \textbf{Socket del proceso propietario}, utilizado para identificar al cliente que inició el trabajo.
+    \item \textbf{Conjunto de peticiones de recursos}, donde cada petición especifica:
+    \begin{itemize}
+        \item la dirección IP del nodo remoto,
+        \item el puerto TCP del nodo,
+        \item el tipo de recurso solicitado (CPU, GPU o RAM),
+        \item la cantidad requerida,
+        \item el estado de la petición (pendiente o concedida).
+    \end{itemize}
+    \item \textbf{Información temporal}, utilizada para detectar trabajos que exceden el tiempo máximo de espera (\texttt{JOB\_TIMEOUT}).
+    \item \textbf{Límite de recursos por trabajo} (\texttt{MAX\_JOB\_RESOURCES}), que restringe la cantidad máxima de reservas asociadas a un mismo trabajo.
+\end{itemize}
+ 
+\paragraph{Operaciones del módulo.}
+El módulo proporciona operaciones para:
+ 
+\begin{itemize}
+    \item Registrar un nuevo trabajo generado por el planificador local.
+    \item Agregar progresivamente las distintas peticiones de recursos que compondrán el trabajo distribuido.
+    \item Marcar una petición como concedida cuando un nodo remoto responde con un mensaje \texttt{GRANTED}, verificando automáticamente si el trabajo ya obtuvo todos los recursos necesarios.
+    \item Obtener la siguiente reserva pendiente para construir mensajes \texttt{CMD\_RESERVE}.
+    \item Recuperar únicamente los recursos efectivamente concedidos cuando un trabajo debe cancelarse, permitiendo liberar dichos recursos mediante mensajes \texttt{CMD\_RELEASE}.
+    \item Detectar trabajos afectados por la caída de un nodo remoto, identificando aquellos que dependían de recursos alojados en dicho nodo.
+    \item Detectar trabajos que permanecen demasiado tiempo esperando respuestas de la red y eliminarlos por \emph{timeout}.
+    \item Eliminar definitivamente un trabajo cuando finaliza correctamente o cuando es cancelado.
+\end{itemize}
+ 
+\subsection{Sobre las implementaciones de los TADs empleados}
+ 
+\paragraph{Complejidades del módulo \texttt{queues.c}.}
+ 
+\begin{table}[h!]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Operación} & \textbf{Complejidad} & \textbf{Descripción} \\
+\midrule
+\texttt{queue\_create}  & $O(1)$ & Inicializa una cola vacía devolviendo \texttt{NULL}. \\
+\texttt{queue\_destroy} & $O(n)$ & Recorre todos los elementos de la cola liberando su memoria. \\
+\texttt{queue\_empty}   & $O(1)$ & Solo verifica si el puntero de la cola es \texttt{NULL}. \\
+\texttt{queue\_add}     & $O(n)$ & Inserta al final de la cola recorriendo todos los nodos hasta encontrar el último. \\
+\texttt{queue\_first}   & $O(1)$ & Accede únicamente al primer elemento de la cola. \\
+\texttt{queue\_remove}  & $O(1)$ & Elimina el primer nodo actualizando el puntero de la cabeza. \\
+\texttt{queue\_delete}  & $O(n)$ & Puede requerir recorrer toda la cola hasta encontrar el elemento buscado. \\
+\texttt{queue\_update}  & $O(n)$ & Busca el elemento a modificar recorriendo secuencialmente la cola. \\
+\bottomrule
+\end{tabular}
+\caption{Complejidades de las operaciones del módulo \texttt{queues.c}}
+\end{table}
+ 
+\paragraph{Complejidades promedio del módulo \texttt{tablahash.c}.}
+ 
+\begin{table}[h!]
+\centering
+\begin{tabular}{@{}lllp{6.5cm}@{}}
+\toprule
+\textbf{Operación} & \textbf{Prom.} & \textbf{Peor caso} & \textbf{Descripción} \\
+\midrule
+\texttt{tablahash\_crear}         & $O(m)$ & --     & Inicializa las $m$ casillas de la tabla. \\
+\texttt{tablahash\_nelems}        & $O(1)$ & --     & Devuelve un contador almacenado en la estructura. \\
+\texttt{tablahash\_capacidad}     & $O(1)$ & --     & Devuelve el tamaño actual de la tabla. \\
+\texttt{tablahash\_destruir}      & $O(m)$ & --     & Recorre todas las posiciones liberando los elementos almacenados. \\
+\texttt{tablahash\_insertar}      & $O(1)$ amortizado & -- & La inserción requiere recorrer el clúster correspondiente; si ocurre una redimensión, deben reinsertarse todos los elementos. \\
+\texttt{tablahash\_buscar}        & $O(1)$ & $O(m)$ & La búsqueda inspecciona únicamente el clúster asociado al valor hash; en el peor caso puede recorrer toda la tabla. \\
+\texttt{tablahash\_eliminar}      & $O(1)$ & $O(m)$ & Localiza el elemento mediante sondeo lineal y marca la casilla como eliminada. \\
+\texttt{tablahash\_visitar}       & $O(m)$ & $O(m)$ & Recorre todas las posiciones de la tabla aplicando una función visitante. \\
+\texttt{tablahash\_visitar\_extra} & $O(m)$ & $O(m)$ & Igual que la anterior, pero pasando un contexto adicional al visitante. \\
+\bottomrule
+\end{tabular}
+\caption{Complejidades promedio de las operaciones del módulo \texttt{tablahash.c}}
+\end{table}
+ 
 \end{document}
