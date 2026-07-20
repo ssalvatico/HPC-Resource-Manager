@@ -10,12 +10,14 @@ init(State, NRequests, Env) when is_integer(NRequests) ->
 
   receive
     {receiver_pid, ReceiverId} ->
+      link(ReceiverId),
       State1 = maps:put(receiver_pid, ReceiverId, State),
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "receiver_pid received", none),
       io:fwrite("[Erlang][INIT] receiver_pid=~p~n", [ReceiverId]),
       init(State1, NRequests, Env);
 
     {sender_pid, SenderId} ->
+      link(SenderId),
       InitPid = self(),
       State1 = maps:put(sender_pid, SenderId, State),
       spawn(fun() -> request_nodes(SenderId) end),
@@ -57,7 +59,7 @@ init(State, NRequests, Env) when is_integer(NRequests) ->
             pending ->
               State1 = maps:put(JobId, granted, State),
               SchedulerPid = self(),
-              spawn(fun () -> simulate_load(JobId, State1, SchedulerPid) end),
+              spawn_link(fun () -> simulate_load(JobId, State1, SchedulerPid) end),
               init(State1, NRequests, Env);
             granted ->
               event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "duplicate job_granted ignored", JobId),
