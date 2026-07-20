@@ -41,7 +41,7 @@ The C agent must be started before the Erlang scheduler.
 From the `c_agent/` directory:
 
 ```bash
-./c_agent <ip> <port> <cpu> <mem> <gpu> <threads>
+./c_agent <ip> <port> <cpu> <mem> <gpu> <num_threads>
 ```
 
 **Note on ports:** each agent uses **two consecutive TCP ports**:
@@ -52,20 +52,20 @@ From the `c_agent/` directory:
 Example:
 
 ```bash
-./c_agent 192.168.1.11 4444 5 3 500 4
+c_agent/c_agent 127.0.0.1 8000 4 8192 1 4
 ```
 
-This starts the agent listening on `192.168.1.11:4444` (public) and
-`192.168.1.11:4445` (Erlang interface).
+This starts the agent listening on `127.0.0.1:8000` (public) and
+`127.0.0.1:8001` (Erlang interface).
 
 ---
 
 ## Running the Erlang Scheduler
 
-Once the C agent is running, from the `erlang/` directory:
+Once the C agent is running, from the project root:
 
 ```bash
-make run HOST=<c_agent_ip> PORT=<erlang_port>
+make runclient HOST=<c_agent_ip> PORT=<erlang_port>
 ```
 
 Where `<erlang_port>` is the C agent's port **+ 1** (the local/Erlang port,
@@ -74,7 +74,7 @@ not the public one).
 Example, connecting to the agent above:
 
 ```bash
-make run HOST=192.168.1.11 PORT=4445
+make runclient HOST=127.0.0.1 PORT=8001
 ```
 
 If `HOST` and `PORT` are omitted, defaults from `header.hrl` are used.
@@ -95,6 +95,9 @@ machine** on the same network. To do so:
 ```bash
    nc -zv <c_agent_ip> <erlang_port>
 ```
+3. If step 2 fails but the ping succeeds, check the firewall on the
+   **C agent's machine** (see Troubleshooting below) — this is the most common
+   cause of connection failures between machines on the same network.
 
 ---
 
