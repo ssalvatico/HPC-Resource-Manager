@@ -18,7 +18,7 @@ void init_server(ServerContext* ctx, int argc, char *argv[]) {
     ctx->epollfd = epoll_create1(0);
 
     ctx->tcp_public_fd = create_tcp_listener(ctx->lan_ip, ctx->port);
-    ctx->erlang_tcp_fd = create_tcp_listener("127.0.0.1", ctx->port);
+    ctx->erlang_tcp_fd = create_tcp_listener(ctx->lan_ip, ctx->port + 1);
     ctx->udp_fd = create_udp_listener_broadcaster(UDP_PORT);
 
     // tcp timerfd config
