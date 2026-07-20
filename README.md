@@ -38,52 +38,81 @@ make erlang-build
 
 The C agent must be started before the Erlang scheduler.
 
-From the project root:
+From the `c_agent/` directory:
 
 ```bash
-make run
+./c_agent <ip> <port> <cpu> <mem> <gpu> <threads>
 ```
 
-This executes:
+**Note on ports:** each agent uses **two consecutive TCP ports**:
 
-```text
-c_agent/c_agent 127.0.0.1 8000 4 8192 1
-```
+* `<port>` — public port, used for agent-to-agent communication.
+* `<port> + 1` — local port, used exclusively by the Erlang scheduler.
 
-Alternatively, from the `c_agent/` directory:
+Example:
 
 ```bash
-./c_agent <ip> <port> <threads> <memory> <gpu>
+./c_agent 192.168.1.11 4444 5 3 500 4
 ```
+
+This starts the agent listening on `192.168.1.11:4444` (public) and
+`192.168.1.11:4445` (Erlang interface).
 
 ---
 
 ## Running the Erlang Scheduler
 
-Once the C agent is running:
+Once the C agent is running, from the `erlang/` directory:
 
 ```bash
-make runclient
+make run HOST=<c_agent_ip> PORT=<erlang_port>
 ```
 
-The scheduler connects to the C agent, retrieves the available nodes, and begins generating and scheduling jobs.
+Where `<erlang_port>` is the C agent's port **+ 1** (the local/Erlang port,
+not the public one).
+
+Example, connecting to the agent above:
+
+```bash
+make run HOST=192.168.1.11 PORT=4445
+```
+
+If `HOST` and `PORT` are omitted, defaults from `header.hrl` are used.
+
+The scheduler connects to the C agent, retrieves the available nodes, and
+begins generating and scheduling jobs.
+
+### Connecting to a remote C agent
+
+The Erlang scheduler can connect to a C agent running on a **different
+machine** on the same network. To do so:
+
+1. Confirm basic connectivity between machines:
+```bash
+   ping <c_agent_ip>
+```
+2. Confirm the target TCP port is reachable:
+```bash
+   nc -zv <c_agent_ip> <erlang_port>
+```
 
 ---
 
 ## Provided script for testing
 
----
-
 You can verify that no deadlock scenarios can occur with our implementation.
-git
-To run the test script
-```./test_deadlock.sh```
 
-To run the test script with providing parameters
-```./test_deadlock.sh 127.0.0.1 8000 8001 4 8192 1 2 4096 0```
+To run the test script:
+```bash
+./test_deadlock.sh
+```
+
+To run the test script providing parameters:
+```bash
+./test_deadlock.sh 127.0.0.1 8000 8001 4 8192 1 2 4096 0
+```
 
 ---
-
 
 ## Project Structure
 
@@ -115,6 +144,40 @@ event_logger.txt
 ```
 
 * Erlang crash dumps are generated automatically if the VM terminates unexpectedly.
+
+### Firewall blocking inter-machine communication
+
+If two C agents can discover each other via UDP (you see `[UDP] Received`
+messages in both logs) but TCP connections between them fail or time out,
+the local firewall is very likely blocking **incoming** TCP connections.
+
+Symptoms:
+* `JOB_REQUEST` involving a remote node results in `JOB_TIMEOUT`.
+* `nc -zv <remote_ip> <port>` fails from the other machine, even though
+  `ping` succeeds.
+
+Fix — open the required TCP ports on **both** machines:
+
+```bash
+sudo ufw allow <public_port>/tcp
+sudo ufw allow <public_port+1>/tcp   # Erlang port
+sudo ufw enable
+```
+
+If the problem persists, temporarily disable the firewall to confirm it is
+the cause:
+
+```bash
+sudo ufw disable
+# test again
+sudo ufw enable
+```
+
+If disabling the firewall does not resolve the issue, the network itself
+(router/AP) may be blocking direct TCP connections between devices (client
+isolation). In that case, testing on a single machine (using `127.0.0.1` or
+a local LAN IP with different ports) or switching to a mobile hotspot is
+recommended.
 
 ---
 

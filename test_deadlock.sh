@@ -33,20 +33,20 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "Compiling..."
-make -C "$CAGENT_DIR" build
+make -C "$CAGENT_DIR"
 make -C "$ERLANG_DIR" build
 
-echo "Starting C Agent A on $IP:$PORT_A..."
-"$CAGENT_DIR/c_agent" "$IP" "$PORT_A" "$CPU_A" "$GPU_A" "$MEM_A" "$THREADS" &
+echo "Starting C Agent A on $IP:$PORT_A (public) / $IP:$((PORT_A + 1)) (erlang)..."
+"$CAGENT_DIR/c_agent" "$IP" "$PORT_A" "$CPU_A" "$MEM_A" "$GPU_A" "$THREADS" &
 C_PID_A=$!
 
-echo "Starting C Agent B on $IP:$PORT_B..."
-"$CAGENT_DIR/c_agent" "$IP" "$PORT_B" "$CPU_B" "$GPU_B" "$MEM_B" "$THREADS" &
+echo "Starting C Agent B on $IP:$PORT_B (public) / $IP:$((PORT_B + 1)) (erlang)..."
+"$CAGENT_DIR/c_agent" "$IP" "$PORT_B" "$CPU_B" "$MEM_B" "$GPU_B" "$THREADS" &
 C_PID_B=$!
 
 echo "Waiting for agents to discover each other..."
 sleep 3
 
-echo "Starting Erlang scheduler..."
+echo "Starting Erlang scheduler, connecting to $IP:$((PORT_A + 1))..."
 erl -pa "$ERLANG_DIR/ebin" -noshell \
-  -eval "erlang_c_bridge:init(\"127.0.0.1\", $PORT_A, $N_REQUESTS, \"$ERLANG_ENV\"), timer:sleep(infinity)."
+  -eval "erlang_c_bridge:init(\"$IP\", $((PORT_A + 1)), $N_REQUESTS, \"$ERLANG_ENV\"), timer:sleep(infinity)."

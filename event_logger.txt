@@ -1,0 +1,58 @@
+ok {erlang_c_bridge,init} initialization <0.9.0> {{2026,7,20},{18,0,3}}
+ok {erlang_c_bridge,connect} "CONNECTION SUCCESSFUL" none {{2026,7,20},{18,0,3}}
+ok {job_scheduler,init} "receiver_pid received" none {{2026,7,20},{18,0,3}}
+ok {job_scheduler,init} "sender_pid received" none {{2026,7,20},{18,0,3}}
+ok {job_scheduler,init} "dump_state" #{} {{2026,7,20},{18,0,8}}
+ok {erlang_c_bridge,sender} "GET_NODES SENT" none {{2026,7,20},{18,0,8}}
+ok {job_scheduler,init} "get_nodes sent succesfully" none {{2026,7,20},{18,0,8}}
+ok {erlang_c_bridge,receiver} "packet received" none {{2026,7,20},{18,0,8}}
+ok {job_scheduler,init} "NODES received" 2 {{2026,7,20},{18,0,8}}
+ok {job_scheduler,init} "job_request" 3 {{2026,7,20},{18,0,8}}
+ok {erlang_c_bridge,sender} "JOB_REQUEST 3 @192.168.1.11:8000:cpu:3 @192.168.1.11:8000:mem:2814 @192.168.1.11:8000:gpu:1 @192.168.1.11:8001:cpu:1 @192.168.1.11:8001:mem:2207\n" 3 {{2026,7,20},{18,0,8}}
+ok {erlang_c_bridge,receiver} "packet received" none {{2026,7,20},{18,0,8}}
+ok {job_scheduler,init} "job_denied" 3 {{2026,7,20},{18,0,8}}
+ok {job_scheduler,init} "dump_state" #{} {{2026,7,20},{18,0,13}}
+ok {erlang_c_bridge,sender} "GET_NODES SENT" none {{2026,7,20},{18,0,13}}
+ok {job_scheduler,init} "get_nodes sent succesfully" none {{2026,7,20},{18,0,13}}
+ok {erlang_c_bridge,receiver} "packet received" none {{2026,7,20},{18,0,13}}
+ok {job_scheduler,init} "NODES received" 2 {{2026,7,20},{18,0,13}}
+ok {job_scheduler,init} "job_request" 2 {{2026,7,20},{18,0,13}}
+ok {erlang_c_bridge,sender} "JOB_REQUEST 2 @192.168.1.11:8000:cpu:2 @192.168.1.11:8000:mem:6994 @192.168.1.11:8000:gpu:1\n" 2 {{2026,7,20},{18,0,13}}
+ok {erlang_c_bridge,receiver} "packet received" none {{2026,7,20},{18,0,13}}
+ok {job_scheduler,init} "job_denied" 2 {{2026,7,20},{18,0,13}}
+ok {job_scheduler,init} "dump_state" #{} {{2026,7,20},{18,0,18}}
+ok {erlang_c_bridge,sender} "GET_NODES SENT" none {{2026,7,20},{18,0,18}}
+ok {job_scheduler,init} "get_nodes sent succesfully" none {{2026,7,20},{18,0,18}}
+ok {erlang_c_bridge,receiver} "packet received" none {{2026,7,20},{18,0,18}}
+ok {job_scheduler,init} "NODES received" 2 {{2026,7,20},{18,0,18}}
+ok {job_scheduler,init} "job_request" 131 {{2026,7,20},{18,0,18}}
+ok {erlang_c_bridge,sender} "JOB_REQUEST 131 @192.168.1.11:8000:cpu:2 @192.168.1.11:8000:mem:2607 @192.168.1.11:8000:gpu:1 @192.168.1.11:8001:cpu:1 @192.168.1.11:8001:mem:2924\n" 131 {{2026,7,20},{18,0,18}}
+ok {erlang_c_bridge,receiver} "packet received" none {{2026,7,20},{18,0,18}}
+ok {job_scheduler,init} "job_denied" 131 {{2026,7,20},{18,0,18}}
+ok {job_scheduler,init} "dump_state" #{} {{2026,7,20},{18,0,23}}
+ok {erlang_c_bridge,sender} "GET_NODES SENT" none {{2026,7,20},{18,0,23}}
+ok {job_scheduler,init} "get_nodes sent succesfully" none {{2026,7,20},{18,0,23}}
+ok {erlang_c_bridge,receiver} "packet received" none {{2026,7,20},{18,0,23}}
+ok {job_scheduler,init} "NODES received" 2 {{2026,7,20},{18,0,23}}
+ok {job_scheduler,init} "job_request" 195 {{2026,7,20},{18,0,23}}
+ok {erlang_c_bridge,sender} "JOB_REQUEST 195 @192.168.1.11:8000:cpu:2 @192.168.1.11:8000:mem:805 @192.168.1.11:8000:gpu:1 @192.168.1.11:8001:cpu:2 @192.168.1.11:8001:mem:2676\n" 195 {{2026,7,20},{18,0,23}}
+ok {erlang_c_bridge,receiver} "packet received" none {{2026,7,20},{18,0,23}}
+ok {job_scheduler,init} "job_denied" 195 {{2026,7,20},{18,0,23}}
+ok {job_scheduler,init} "dump_state" #{} {{2026,7,20},{18,0,28}}
+ok {erlang_c_bridge,sender} "GET_NODES SENT" none {{2026,7,20},{18,0,28}}
+ok {job_scheduler,init} "get_nodes sent succesfully" none {{2026,7,20},{18,0,28}}
+ok {erlang_c_bridge,receiver} "packet received" none {{2026,7,20},{18,0,28}}
+ok {job_scheduler,init} "NODES received" 2 {{2026,7,20},{18,0,28}}
+ok {job_scheduler,init} "job_request" 259 {{2026,7,20},{18,0,28}}
+ok {erlang_c_bridge,sender} "JOB_REQUEST 259 @192.168.1.11:8000:cpu:2 @192.168.1.11:8000:mem:7554 @192.168.1.11:8000:gpu:1\n" 259 {{2026,7,20},{18,0,28}}
+ok {erlang_c_bridge,receiver} "packet received" none {{2026,7,20},{18,0,28}}
+ok {job_scheduler,init} "job_denied" 259 {{2026,7,20},{18,0,28}}
+ok {job_scheduler,init} "dump_state" #{} {{2026,7,20},{18,0,33}}
+ok {erlang_c_bridge,sender} "GET_NODES SENT" none {{2026,7,20},{18,0,33}}
+ok {job_scheduler,init} "get_nodes sent succesfully" none {{2026,7,20},{18,0,33}}
+ok {erlang_c_bridge,receiver} "packet received" none {{2026,7,20},{18,0,33}}
+ok {job_scheduler,init} "NODES received" 2 {{2026,7,20},{18,0,33}}
+ok {job_scheduler,init} "job_request" 66 {{2026,7,20},{18,0,33}}
+ok {erlang_c_bridge,sender} "JOB_REQUEST 66 @192.168.1.11:8000:cpu:2 @192.168.1.11:8000:mem:1039 @192.168.1.11:8000:gpu:1\n" 66 {{2026,7,20},{18,0,33}}
+ok {erlang_c_bridge,receiver} "packet received" none {{2026,7,20},{18,0,33}}
+ok {job_scheduler,init} "job_denied" 66 {{2026,7,20},{18,0,33}}

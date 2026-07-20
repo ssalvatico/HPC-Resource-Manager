@@ -6,7 +6,7 @@
 /* INITIALIZATION                                                            */
 /* ========================================================================= */
 
-node_data_t init_node(unsigned cpu, unsigned gpu, unsigned ram) {
+node_data_t init_node(unsigned cpu, unsigned ram, unsigned gpu) {
     
     // 1. Allocate memory for the main container
     node_data_t node = malloc(sizeof(struct node_data_t_));
@@ -43,7 +43,7 @@ node_data_t init_node(unsigned cpu, unsigned gpu, unsigned ram) {
     }
 
     printf("[INITIALIZATION] Node structures successfully created.\n");
-    printf("                 -> Hardware limits set to: CPU: %u | GPU: %u | RAM: %u\n", cpu, gpu, ram);
+    printf("                 -> Hardware limits set to: CPU: %u | RAM: %u | GPU: %u\n", cpu, ram, gpu);
 
     
     return node;

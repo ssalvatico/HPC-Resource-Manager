@@ -44,7 +44,7 @@ $(BUILD_DIR)/%.o: %.c
 
 # 2. Comando RUN actualizado con 6 parámetros: IP Port CPU GPU RAM Hilos
 run: $(TARGET)
-	./$(TARGET) "$(IP)" "$(PORT)" "$(CPU)" "$(GPU)" "$(RAM)" "$(THREADS)"
+	./$(TARGET) "$(IP)" "$(PORT)" "$(CPU)" "$(RAM)" "$(GPU)" "$(THREADS)"
 
 
 clear:
