@@ -153,13 +153,22 @@ int handle_client_message(ServerContext* ctx, int curr_fd) {
     if (bytes_read > 0) {
         printf("Msg received (FD %d - IP: %s): %s\n", curr_fd, target_ip, recv_buffer);
         
-
-        // Juani modifica el outbox segun si quiere responder o no, el lo decide
-        // Aca podria mandar el puerto de quien lo envia, que es cero de que ellos se hayan conectado
-        resource_adapter_patch(ctx, target_ip, curr_fd, recv_buffer, outbox, &outbox_count, ACTION_RESPOND);
-
-        // mandamos lo que nos dijo juani
-        send_outbox(ctx, outbox, outbox_count);
+        char *saveptr;
+        char *line = strtok_r(recv_buffer, "\n", &saveptr); // Cortamos por el salto de línea
+        
+        while (line != NULL) {
+            // Ignorar líneas vacías por saltos de línea repetidos
+            if (strlen(line) > 0) {
+                outbox_count = 0; // Reseteamos el contador para cada sub-mensaje
+                resource_adapter_patch(ctx, target_ip, curr_fd, line, outbox, &outbox_count, ACTION_RESPOND);
+                
+                if (outbox_count > 0) {
+                    send_outbox(ctx, outbox, outbox_count);
+                }
+            }
+            // Buscar el siguiente comando en el mismo buffer
+            line = strtok_r(NULL, "\n", &saveptr);
+        }
         return 1;
     } else if (bytes_read == 0 || bytes_read != -2) {
         if (bytes_read == 0) {

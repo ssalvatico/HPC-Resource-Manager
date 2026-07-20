@@ -137,10 +137,31 @@ int main() {
     // Verificamos que sean el 200 y el 201
     int match = ((afectados[0] == 200 && afectados[1] == 201) || (afectados[0] == 201 && afectados[1] == 200));
     assert_cond(match, "13. Los Jobs identificados son los correctos (200 y 201)");
-
     /* =========================================================================
-       TEST G: DESTRUCCION FINAL (Memory Leaks Check)
+       TEST H: BUSQUEDA POR OWNER SOCKET (Huérfanos)
        ========================================================================= */
+    printf("\n--> TEST H: Busqueda de Jobs Huerfanos (owner_socket)\n");
+    
+    // Simulamos que el cliente Erlang Viejo (Socket 44) pidió dos trabajos
+    add_new_owned_job(jobs, 900, 44);
+    add_new_owned_job(jobs, 901, 44);
+    
+    // Simulamos que un cliente Erlang Nuevo (Socket 55) pidió un trabajo
+    add_new_owned_job(jobs, 902, 55);
+
+    unsigned huerfanos[10];
+    // Ejecutamos nuestra nueva función visitante buscando solo a los del Socket 44
+    unsigned cant_huerfanos = get_jobs_by_owner_socket(jobs, 44, huerfanos, 10);
+
+    assert_cond(cant_huerfanos == 2, "15. Encuentra exactamente los 2 jobs pertenecientes al socket 44");
+    
+    // El orden no importa en las tablas hash, así que validamos ambas combinaciones
+    int match_h = ((huerfanos[0] == 900 && huerfanos[1] == 901) || (huerfanos[0] == 901 && huerfanos[1] == 900));
+    assert_cond(match_h, "16. Los IDs de los jobs huerfanos extraidos son los correctos (900 y 901)");
+    
+    /* =========================================================================
+    TEST G: DESTRUCCION FINAL (Memory Leaks Check)
+    ========================================================================= */
     printf("\n--> TEST G: Limpieza de Memoria\n");
     delete_owned_jobs(jobs);
     printf("[EXITO] 14. Estructuras destruidas\n");
@@ -152,6 +173,7 @@ int main() {
         printf(" \033[0;31mRESULTADO: FALLARON %d TESTS. REVISA EL CODIGO.\033[0m\n", errores_test);
     }
     printf("==================================================\n");
+
 
     return 0;
 }

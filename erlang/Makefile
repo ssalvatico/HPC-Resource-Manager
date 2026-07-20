@@ -1,6 +1,6 @@
 EBIN = ebin
 
-PORT?=8001
+PORT?=8000
 ENV?=DEV
 
 MODULES = \
