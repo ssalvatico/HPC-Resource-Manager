@@ -153,11 +153,13 @@ int handle_client_message(ServerContext* ctx, int curr_fd) {
     if (bytes_read > 0) {
         printf("Msg received (FD %d - IP: %s): %s\n", curr_fd, target_ip, recv_buffer);
         
+        recv_buffer[bytes_read] = '\0';
+
         char *saveptr;
         char *line = strtok_r(recv_buffer, "\n", &saveptr); // Cortamos por el salto de línea
         
         while (line != NULL) {
-            // Ignorar líneas vacías por saltos de línea repetidos
+        
             if (strlen(line) > 0) {
                 outbox_count = 0; // Reseteamos el contador para cada sub-mensaje
                 resource_adapter_patch(ctx, target_ip, curr_fd, line, outbox, &outbox_count, ACTION_RESPOND);
