@@ -50,7 +50,7 @@ static void handle_get_nodes_response(ServerContext *ctx, unsigned socket, out_m
     pthread_mutex_unlock(&NODE->lock_known);
 
     char final_msg[BUFFER_SIZE + 1];
-    snprintf(final_msg, sizeof(final_msg), "%s\n", msg);
+    snprintf(final_msg, sizeof(final_msg), "%s", msg);
     
     add_to_outbox(outbox, count, final_msg, socket, NULL, 0);
 }
