@@ -1,6 +1,6 @@
 EBIN = ebin
 
-HOST?=192.168.1.69
+HOST?=$(shell hostname -I | awk '{print $$1}')
 PORT?=8001
 N_REQUESTS?=1
 ENV?=DEV

@@ -43,6 +43,19 @@ void delete_owned_jobs(owned_jobs_t jobs);
  * @return 1 on success, 0 on memory allocation failure.
  */
 int add_new_owned_job(owned_jobs_t jobs, unsigned job_id, unsigned owner_socket);
+
+/**
+ * @brief Retrieves the socket (owner) that originally requested a given job.
+ *
+ * Looks up the job by its ID and returns the file descriptor of the local
+ * Erlang connection that created it. Used to route responses (e.g.,
+ * JOB_GRANTED, JOB_DENIED, JOB_TIMEOUT) back to the correct client when
+ * multiple Erlang connections could theoretically be active.
+ *
+ * @param jobs Hash table managing the owned jobs.
+ * @param job_id The unique identifier of the job to look up.
+ * @return The owner socket file descriptor, or 0 if the job was not found.
+ */
 unsigned get_job_owner_socket(owned_jobs_t jobs, unsigned job_id);
 
 /**

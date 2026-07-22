@@ -1,6 +1,6 @@
 -module(erlang_c_bridge).
 -include("header.hrl").
--export([init/0, init/4, conn_handler/2, sender/2, receiver/2, connect/4, split_messages/1, split_messages/2]).
+-export([init/0, init/4, conn_handler/2, sender/2, receiver/2, connect/4, split_messages/1, split_messages/2, normalize_env/1]).
 
 
 
@@ -30,8 +30,8 @@ connect(Host, Port, Nth_try, JobSchedulerId) ->
 %%% Spawns the sender and receiver processes, then notifies the scheduler
 %%% with their PIDs. Terminates after delegation.
 conn_handler(Socket, JobSchedulerId) ->
-    ReceiverId = spawn(?MODULE, receiver, [Socket, JobSchedulerId]),
-    SenderId = spawn(?MODULE, sender, [Socket, JobSchedulerId]),
+    ReceiverId = spawn_link(?MODULE, receiver, [Socket, JobSchedulerId]),
+    SenderId = spawn_link(?MODULE, sender, [Socket, JobSchedulerId]),
     JobSchedulerId ! {receiver_pid, ReceiverId},
     JobSchedulerId ! {sender_pid, SenderId}.
 
@@ -46,7 +46,9 @@ receiver(Socket, JobSchedulerId) ->
             receiver(Socket, JobSchedulerId);
         {error, closed} ->
             io:format("error, closed~n"),
-            JobSchedulerId ! {error, closed};
+            JobSchedulerId ! {error, closed},
+            event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "connection closed", none),
+            halt("connection closed");
         {error, Reason} ->
             io:format("Error received with reason ~p~n",[Reason]),
             JobSchedulerId ! {error, Reason}
@@ -107,8 +109,16 @@ init() ->
     init(Host, Port, ?N_REQUESTS, Env).
 
 init(Host, Port, NRequests, Env) ->
+    NormalizedEnv = normalize_env(Env),
     ServLoggerId = spawn(event_logger, init, []),
     register(eventLoggerId, ServLoggerId),
     event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, initialization, self()),
-    JobSchedulerId = spawn(job_scheduler, init, [NRequests, Env]),
+    JobSchedulerId = spawn(job_scheduler, init, [NRequests, NormalizedEnv]),
     connect(Host, Port, ?TRIES, JobSchedulerId).
+
+
+normalize_env("DEV") -> "DEV";
+normalize_env("TEST") -> "TEST";
+normalize_env(Other) ->
+    io:fwrite("[Erlang][WARN] Unknown ENV '~s', defaulting to DEV~n", [Other]),
+    "DEV".

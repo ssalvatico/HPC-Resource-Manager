@@ -68,11 +68,7 @@ init(State, NRequests, Env) when is_integer(NRequests) ->
             undefined ->
               event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "job_granted for unknown job", JobId),
               io:fwrite("[Erlang][ERR] grant for unknown id=~p~n", [JobId]),
-              init(State, NRequests, Env);
-            Other ->
-              event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "Invalid state transition", JobId),
-              io:fwrite("[Erlang][ERR] invalid state transition id=~p state=~p~n", [JobId, Other]),
-              throw(io:format("Invalid state transition ~p", [Other]))
+              init(State, NRequests, Env)
           end;
 
         {job_denied, JobId} ->
@@ -164,18 +160,18 @@ get_node_list(Packet) ->
 %%% Format: "ip:port:cpu:N:mem:N:gpu:N"
 %%% 
 validate_and_get_node(Node) ->
-  %% Check if the incoming Node Ip is valid.
-  [Ip | Rest] = string:split(Node, ":"),
-  {ok, _} = inet:parse_strict_address(Ip),
+    [Ip, Port | ResourceTokens] = string:split(Node, ":", all),
 
-  %% Check if the incoming Node Port is valid.
-  [Port | Rest2] = string:split(Rest, ":"),
+    %% Check if the incoming Node Ip is valid.
+    {ok, _} = inet:parse_strict_address(Ip),
 
-  IntPort = list_to_integer(Port),
-  true = is_integer(IntPort) and (IntPort >= 1) and (IntPort =< 65535),
-  %%nGet the resources and place them in pairs.
-  ResourcePairs = to_pairs(string:split(Rest2, ":", all)),
-  lists:foldl(fun assign_resource/2, #node{ip = Ip, port = Port}, ResourcePairs).
+    %% Check if the incoming Node Port is valid.
+    IntPort = list_to_integer(Port),
+    true = is_integer(IntPort) and (IntPort >= 1) and (IntPort =< 65535),
+
+    %% Get the resources and place them in pairs.
+    ResourcePairs = to_pairs(ResourceTokens),
+    lists:foldl(fun assign_resource/2, #node{ip = Ip, port = Port}, ResourcePairs).
 
 %%% Converts a flat list of alternating keys and values into tuples.
 %%% Example: ["cpu", "4", "gpu", "1"] -> [{"cpu", 4}, {"gpu", 1}]
