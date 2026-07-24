@@ -20,8 +20,8 @@ init(State, NRequests, Env) when is_integer(NRequests) ->
       link(SenderId),
       InitPid = self(),
       State1 = maps:put(sender_pid, SenderId, State),
-      spawn(fun() -> request_nodes(SenderId) end),
-      spawn(fun() -> state_tick(InitPid) end),
+      spawn_link(fun() -> request_nodes(SenderId) end),
+      spawn_link(fun() -> state_tick(InitPid) end),
       event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "sender_pid received", none),
       io:fwrite("[Erlang][INIT] sender_pid=~p~n", [SenderId]),
       init(State1, NRequests, Env);

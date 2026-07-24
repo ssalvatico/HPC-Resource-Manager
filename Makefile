@@ -1,5 +1,6 @@
 ERLANG_DIR = erlang
 C_DIR = c_agent
+PORT?=8000
 
 all: c-build erlang-build
 
@@ -15,7 +16,7 @@ c-build:
 	$(MAKE) -C $(C_DIR)
 
 c-run:
-	$(MAKE) -C $(C_DIR) run
+	$(MAKE) -C $(C_DIR) PORT=$(PORT) run
 
 c-clear:
 	$(MAKE) -C $(C_DIR) clear
@@ -24,7 +25,7 @@ erlang-build:
 	$(MAKE) -C $(ERLANG_DIR) build
 
 erlang-run:
-	$(MAKE) -C $(ERLANG_DIR) run
+	$(MAKE) -C $(ERLANG_DIR) $(( $(PORT) + 1 )) run
 
 erlang-clear:
 	$(MAKE) -C $(ERLANG_DIR) clear

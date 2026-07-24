@@ -17,7 +17,7 @@ connect(Host, Port, Nth_try, JobSchedulerId) ->
     case gen_tcp:connect(Host , Port , [binary, {packet, line}, {active, false}] , ?TIMEOUT) of
         {ok, Socket} ->
             event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "CONNECTION SUCCESSFUL", none),
-            spawn(?MODULE, conn_handler, [Socket, JobSchedulerId]);
+            spawn_link(?MODULE, conn_handler, [Socket, JobSchedulerId]);
     
         {error, Reason} -> 
             timer:sleep(?TIMEOUT),
@@ -47,8 +47,7 @@ receiver(Socket, JobSchedulerId) ->
         {error, closed} ->
             io:format("error, closed~n"),
             JobSchedulerId ! {error, closed},
-            event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "connection closed", none),
-            halt("connection closed");
+            event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "connection closed", none);
         {error, Reason} ->
             io:format("Error received with reason ~p~n",[Reason]),
             JobSchedulerId ! {error, Reason}
