@@ -2,6 +2,7 @@
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
+\usepackage{lmodern}
 \usepackage[spanish]{babel}
 \usepackage{geometry}
 \usepackage{listings}
@@ -61,7 +62,7 @@ Lucio Oviedo Dell'Orefice \\
 Santiago Salvático
 }
 \date{23 de junio de 2026}
-\usepackage{lmodern}
+
 \begin{document}
 
 \maketitle
@@ -77,9 +78,11 @@ Este informe describe el diseño e implementación de un gestor de recursos dist
 El lado de Erlang es responsable de la generación de trabajos, la orquestación de solicitudes de recursos, la prevención de interbloqueos (deadlocks) y el registro de eventos. El lado de C gestiona los recursos locales, maneja conexiones concurrentes a través de \texttt{epoll} e implementa el descubrimiento de nodos basado en UDP.
 
 %---------------------------------------------------------------
-\section{Arquitectura del Componente Erlang}
+\section{Arquitectura del Sistema}
 
-\subsection{Descripción General de los Módulos}
+En primera instancia, nos hemos abstraído de la estructura del nodo particionándola en sus componentes principales.
+
+\subsection{Arquitectura del Componente Erlang}
 
 El componente Erlang está estructurado en cuatro módulos con responsabilidades claramente separadas:
 
@@ -96,9 +99,7 @@ El componente Erlang está estructurado en cuatro módulos con responsabilidades
 \end{tabular}
 \end{center}
 
-\subsection{Arquitectura de Procesos}
-
-El sistema consta de dos componentes principales por nodo: un agente C y un planificador Erlang. El lado de Erlang utiliza el modelo de actores: cada unidad lógica se ejecuta como un proceso independiente que se comunica exclusivamente a través del paso de mensajes, sin memoria compartida. El agente C maneja toda la E/S de red utilizando \texttt{epoll}, delegando la lógica de recursos a módulos internos conectados a través de una interfaz bien definida.
+El sistema utiliza el modelo de actores: cada unidad lógica se ejecuta como un proceso independiente que se comunica exclusivamente a través del paso de mensajes, sin memoria compartida. El agente C, por su parte, maneja toda la E/S de red utilizando \texttt{epoll}, delegando la lógica de recursos a módulos internos conectados a través de una interfaz bien definida.
 
 \begin{figure}[H]{
 \begin{tikzpicture}[
@@ -147,19 +148,10 @@ El sistema consta de dos componentes principales por nodo: un agente C y un plan
 \draw[arr] (agent) -- node[right,font=\scriptsize, pos=0.8] {ANNOUNCE} (udp);
 \draw[arr] (udp) -- (agent);
 
-
 \end{tikzpicture}
 }
 \caption{Arquitectura del sistema de comunicaciones}
 \end{figure}
-
-\subsection{Convención del Entorno de Pruebas}
-
-Para simplificar las pruebas de interbloqueo sin las restricciones del ordenamiento global de recursos, se introdujo una convención para la variable de entorno \texttt{ENV}. Cuando \texttt{ENV} se establece en \texttt{"test"}, la función \texttt{generate\_job\_request} omite el paso de ordenamiento de recursos, permitiendo que los trabajos soliciten recursos en un orden arbitrario. Esto hace posible activar deliberadamente el escenario de interbloqueo descrito en la Sección 4 y verificar que el sistema lo detecte o se recupere de él.
-
-En producción (\texttt{ENV} sin establecer o con cualquier otro valor), siempre se aplica el ordenamiento global y el interbloqueo se previene estructuralmente.
-
-\subsection{Secuencia de Inicio}
 
 \subsection{Secuencia de Inicio del Agente C}
 
@@ -175,7 +167,7 @@ El agente C se inicia con cinco argumentos: dirección IP, puerto TCP y los recu
     \item Cuando expira el temporizador TCP, ambos sockets TCP se añaden a epoll y el agente comienza a aceptar conexiones de otros agentes y del planificador Erlang local.
 \end{enumerate}
 
-Cuando se llama a \texttt{erlang\_c\_bridge:init/0}:
+Del lado de Erlang, cuando se llama a \texttt{erlang\_c\_bridge:init/0}:
 
 \begin{enumerate}
   \item Genera (spawns) el proceso \texttt{event\_logger} y lo registra bajo el átomo \texttt{eventLoggerId}.
@@ -204,7 +196,7 @@ Durante las pruebas de conexión remota se identificó que, si bien el descubrim
 
 \subsection{Tolerancia a Fallos y Enlace de Procesos}
 
-Para cumplir con el requisito de que, ante la caída de un proceso auxiliar (\emph{worker}), el planificador completo también finalice, se utilizó el mecanismo de \textbf{enlace de procesos} (\texttt{link/1}) propio de Erlang. Cuando el planificador recibe los identificadores de proceso de \texttt{sender} y \texttt{receiver}, se enlaza a ambos:
+Para garantizar la tolerancia a fallos, y cumplir con el requisito de que, ante la caída de un proceso auxiliar (\emph{worker}), el planificador completo también finalice, se utilizó el mecanismo de \textbf{enlace de procesos} (\texttt{link/1}) propio de Erlang. Cuando el planificador recibe los identificadores de proceso de \texttt{sender} y \texttt{receiver}, se enlaza a ambos:
 
 \begin{lstlisting}
 {receiver_pid, ReceiverId} ->
@@ -216,6 +208,127 @@ Para cumplir con el requisito de que, ante la caída de un proceso auxiliar (\em
 \end{lstlisting}
 
 De esta manera, si cualquiera de estos dos procesos termina de forma anómala, la señal de salida se propaga al planificador y lo finaliza también, evitando que el sistema quede en un estado parcialmente vivo e inconsistente. El mismo criterio se aplicó al proceso que simula la ejecución de un trabajo (\texttt{simulate\_load}), que se genera mediante \texttt{spawn\_link/1} en lugar de \texttt{spawn/1}, de modo que una falla durante la simulación de carga también sea detectada por el planificador.
+
+\subsection{Arquitectura de Concurrencia del Agente C}
+
+El agente C se apoya en un único hilo principal que ejecuta el bucle de eventos de \texttt{epoll}, y un \emph{pool} de hilos de trabajo (\texttt{thread\_pool}) que procesa las tareas resultantes. El hilo principal nunca realiza operaciones bloqueantes: al detectar un evento en \texttt{epoll\_wait}, lo clasifica y, según su tipo, lo atiende directamente (expiración de temporizadores, nuevas conexiones TCP) o lo encola como una \texttt{WorkerTask} para que un hilo del \emph{pool} la procese de forma asíncrona.
+
+Todos los descriptores de archivo correspondientes a conexiones TCP se registran en \texttt{epoll} con la bandera \texttt{EPOLLONESHOT}. Esta bandera indica al kernel que, tras notificar un evento sobre un descriptor, deje de vigilarlo hasta que se lo rearme explícitamente. Esto evita una condición de carrera real: sin \texttt{EPOLLONESHOT}, si llegaran nuevos datos a un socket mientras un hilo del \emph{pool} todavía está procesando el evento anterior sobre ese mismo socket, \texttt{epoll} podría notificar el mismo descriptor a un segundo hilo, resultando en dos hilos leyendo el mismo socket simultáneamente. Al desarmar el descriptor tras cada evento, se garantiza que un socket solo puede estar siendo procesado por un hilo a la vez; una vez que el hilo termina, rearma el descriptor mediante \texttt{rearm\_epoll\_fd}, y \texttt{epoll} vuelve a vigilarlo con normalidad. Ningún dato se pierde durante el intervalo en que el descriptor está desarmado, ya que el kernel conserva los datos entrantes en el buffer del socket hasta que se lo vuelve a registrar.
+
+La tabla \texttt{active\_connections}, que asocia cada descriptor de archivo con su IP, puerto y estado, se protege con un \texttt{pthread\_rwlock}. Dado que la mayoría de los accesos a esta tabla son de lectura (consultar si existe una conexión hacia determinado nodo) y las escrituras son comparativamente poco frecuentes (alta o baja de una conexión), este tipo de lock permite que múltiples hilos lectores accedan concurrentemente, serializando únicamente las operaciones de escritura.
+
+\subsection{Motivación y Gestión de Conexiones Activas}
+
+La tabla \texttt{active\_connections} centraliza el estado de todos los sockets TCP del agente, pero su diseño y comportamiento están estrictamente dictados por la dualidad del sistema, el cual debe operar simultáneamente como cliente y como servidor. 
+
+\paragraph{Separación de Módulos y Locks Independientes.}
+Esta necesidad de manejar tráfico bidireccional asíncrono motivó la separación de la lógica del agente en distintos archivos C, aislando el estado del servidor (\texttt{local\_resources}) del estado del cliente (\texttt{owned\_jobs}) y del directorio general (\texttt{known\_nodes}). Esta modularización estructural es precisamente lo que justifica la implementación de tres \emph{locks} independientes (\texttt{lock\_local}, \texttt{lock\_owned} y \texttt{lock\_known}) en lugar de un único \emph{mutex} global. Gracias a esto, el sistema evita la contención cruzada: la recepción y encolado de una petición entrante no bloquea la generación simultánea de una nueva solicitud saliente, maximizando la concurrencia del \emph{thread pool}.
+
+\paragraph{Mensajes Entrantes (Rol Servidor).}
+Cuando se trata de conexiones entrantes, el agente actúa en su rol de servidor (delegando la lógica a \texttt{local\_resources}). En este escenario, el sistema se basa \textbf{exclusivamente en el descriptor de archivo (fd)} para identificar unívocamente la sesión. 
+
+Esto se debe a una limitación técnica fundamental: a nivel de socket, el sistema operativo receptor solo puede ver el puerto efímero (aleatorio) del remitente, imposibilitando descubrir de forma fiable cuál es el puerto público real donde ese nodo está escuchando anuncios. A su vez, basar la identificación únicamente en la dirección IP es inviable, ya que la arquitectura permite explícitamente que múltiples nodos se ejecuten sobre la misma máquina (misma IP) en distintos puertos. Por esta razón, en la faceta de servidor \textbf{no existe reutilización de descriptores} para tráfico cruzado; el FD es la única garantía de identidad. 
+
+\emph{Nota:} El cliente Erlang local es tratado como un caso especial de conexión entrante. Su conexión sobre el puerto local (\texttt{<port> + 1}) se registra en \texttt{active\_connections} y se identifica exclusivamente por su FD, manteniéndose persistente y aislada del tráfico público.
+
+\paragraph{Mensajes Salientes (Rol Cliente).}
+Por el contrario, para la emisión de mensajes salientes, el agente asume el rol de cliente (gestionado por \texttt{owned\_jobs}). Aquí el comportamiento frente a \texttt{active\_connections} cambia radicalmente para optimizar el uso de la red: \textbf{sí existe reutilización de descriptores}.
+
+Cuando el orquestador \texttt{resource\_adapter.c} necesita enviar una petición (por ejemplo, un comando \texttt{RESERVE}) a un nodo remoto, el sistema sí conoce con exactitud la IP y el puerto de escucha destino, obtenidos a través del directorio \texttt{known\_nodes}. Aprovechando esto, el orquestador invoca la función \texttt{search\_fd\_by\_ip\_port}. Esta función consulta la tabla de conexiones para verificar si ya existe un socket saliente activo hacia esa dupla (IP, Puerto). De ser así, se reutiliza el mismo FD para enrutar la nueva petición. Esta reutilización es crítica para el rendimiento del clúster, ya que evita la latencia y la sobrecarga que implicaría realizar un nuevo \emph{handshake} TCP por cada recurso individual solicitado a un mismo destino.
+
+\subsection{Flujo de Procesamiento y Ciclo de Vida de los Mensajes}
+
+La arquitectura asíncrona del agente C delega el procesamiento de mensajes a través de una tubería clara. El ciclo de vida de un mensaje entrante comienza en el hilo principal y finaliza con la intervención de un módulo específico que determina la respuesta. El flujo es orquestado centralmente por \texttt{resource\_adapter.c}, operando de la siguiente manera:
+
+\begin{enumerate}
+    \item \textbf{Recepción (\texttt{epoll} y \emph{Thread Pool}):} El hilo principal detecta un evento (TCP o UDP) y lo encola como una tarea asíncrona para que un hilo de trabajo (\emph{worker}) extraiga los datos del socket.
+    \item \textbf{Orquestación y Enrutamiento (\texttt{resource\_adapter.c}):} Este módulo actúa como el controlador principal. Parsea el mensaje entrante, determina el tipo de directiva, adquiere el \emph{lock} correspondiente (\texttt{lock\_local}, \texttt{lock\_known} o \texttt{lock\_owned}) y deriva la ejecución al módulo responsable:
+    \begin{itemize}
+        \item \textbf{Descubrimiento UDP:} Ante un mensaje \texttt{ANNOUNCE}, se invoca al módulo \textbf{\texttt{known\_nodes}}. Este actualiza la marca temporal en la tabla hash o inserta un nuevo nodo. No genera una respuesta de red.
+        \item \textbf{Peticiones Entrantes (Rol Servidor):} Cuando se recibe un \texttt{RESERVE} por el puerto público, el mensaje se envía a \textbf{\texttt{local\_resources}}. Este módulo evalúa la disponibilidad física; si hay recursos, emite directamente la respuesta \texttt{GRANTED} al nodo remoto. Si no, encola la petición (\texttt{request\_queue}).
+        \item \textbf{Directivas del Planificador (TCP Local):} Un \texttt{JOB\_REQUEST} proveniente de Erlang es delegado a \textbf{\texttt{owned\_jobs}}. El agente asume su Rol Cliente, inicializa las estructuras del trabajo y envía peticiones \texttt{RESERVE} a los nodos remotos implicados.
+        \item \textbf{Respuestas de Nodos Remotos (Rol Cliente):} La recepción de un \texttt{GRANTED} o \texttt{DENIED} desde un agente externo también es manejada por \textbf{\texttt{owned\_jobs}}. Se actualiza el estado de la reserva en vuelo y, si el trabajo ha obtenido la totalidad de sus recursos, este módulo se encarga de emitir la respuesta final \texttt{JOB\_GRANTED} hacia el planificador Erlang local.
+    \end{itemize}
+\end{enumerate}
+
+El siguiente diagrama ilustra cómo \texttt{epoll} alimenta el sistema y cómo \texttt{resource\_adapter.c} divide los trabajos y desencadena las respuestas según el rol de cada módulo:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    font=\small,
+    box/.style={draw=black, fill=blue!5, rounded corners=5pt, minimum width=3cm, minimum height=0.8cm, align=center},
+    module/.style={draw=black, fill=green!10, rounded corners=5pt, minimum width=3.5cm, minimum height=0.8cm, align=center},
+    response/.style={draw=black, fill=orange!10, rounded corners=5pt, minimum width=3.5cm, minimum height=0.8cm, align=center},
+    arr/.style={-{Latex}, thick}
+]
+
+% Entrada
+\node[box, minimum width=11cm, fill=blue!15] (epoll) at (0, 0) {\textbf{Hilo Principal (\texttt{epoll}) + Thread Pool} \\ \scriptsize{Lectura de sockets y desarmado (EPOLLONESHOT)}};
+
+\node[box, minimum width=11cm, fill=blue!10] (adapter) at (0, -1.8) {\textbf{\texttt{resource\_adapter.c}} \\ \scriptsize{Parseo de comandos, manejo de \emph{locks} y enrutamiento central}};
+
+% Módulos Destino
+\node[module] (known) at (-5.5, -4.5) {\texttt{known\_nodes} \\ \scriptsize{Gestión de Directorio}};
+\node[module] (local) at (0, -4.5) {\texttt{local\_resources} \\ \scriptsize{Rol Servidor}};
+\node[module] (owned) at (5.5, -4.5) {\texttt{owned\_jobs} \\ \scriptsize{Rol Cliente}};
+
+% Respuestas
+\node[response] (resp_known) at (-5.5, -7) {Actualiza \texttt{known\_nodes\_t}\\ \scriptsize{(Sin respuesta en red)}};
+\node[response] (resp_local) at (0, -7) {Responde \texttt{GRANTED} al \\ agente remoto o encola};
+\node[response] (resp_owned) at (5.5, -7) {Responde \texttt{JOB\_GRANTED} \\ al planificador Erlang local};
+
+% Conexiones Epoll -> Adapter
+\draw[arr] (epoll) -- node[right, font=\scriptsize] {Buffer bruto} (adapter);
+
+% Conexiones Adapter -> Módulos
+\draw[arr] (adapter) -| node[left, pos=0.15, font=\scriptsize, align=center] {UDP Broadcast\\(\texttt{ANNOUNCE})} (known);
+\draw[arr] (adapter) -- node[right, font=\scriptsize, align=center] {TCP Público\\(\texttt{RESERVE}/\texttt{RELEASE})} (local);
+\draw[arr] (adapter) -| node[right, pos=0.15, font=\scriptsize, align=center] {TCP Erlang (\texttt{JOB\_REQUEST})\\TCP Público (\texttt{GRANTED})} (owned);
+
+% Conexiones Módulos -> Respuestas
+\draw[arr] (known) -- (resp_known);
+\draw[arr] (local) -- (resp_local);
+\draw[arr] (owned) -- node[right, font=\scriptsize, align=center] {Si se reúnen\\todos los recursos} (resp_owned);
+
+\end{tikzpicture}
+\caption{Ciclo de vida de los mensajes: desde su recepción en \texttt{epoll} hasta la respuesta de red, orquestado a través de \texttt{resource\_adapter.c}.}
+\end{figure}
+
+\subsection{Contenedor Global del Nodo y Sincronización}
+
+La información de cada nodo se unifica en una única estructura opaca, \texttt{node\_data\_t}, que actúa como contenedor de los tres módulos principales (\texttt{known\_nodes}, \texttt{local\_resources} y \texttt{owned\_jobs}), descriptos en detalle en la Sección~\ref{sec:estructuras}. En lugar de utilizar un único \emph{mutex} global para proteger todo el estado del nodo, se optó por un esquema de \textbf{tres locks independientes}, uno por módulo:
+
+\begin{itemize}
+    \item \texttt{lock\_local}: protege los recursos físicos propios y la tabla de trabajos activos concedidos a nodos remotos.
+    \item \texttt{lock\_known}: protege el directorio de nodos conocidos (descubiertos vía \texttt{ANNOUNCE}).
+    \item \texttt{lock\_owned}: protege la tabla de trabajos iniciados por el planificador Erlang local.
+\end{itemize}
+
+Esta separación reduce la contención entre operaciones que, en la práctica, no interfieren entre sí: por ejemplo, actualizar el directorio de nodos conocidos ante un \texttt{ANNOUNCE} no debería bloquear el procesamiento de una reserva local (\texttt{RESERVE}). Cuando una misma operación necesita interactuar con más de un módulo (por ejemplo, al detectar un nodo caído, que requiere leer \texttt{known\_nodes}, identificar los trabajos afectados en \texttt{owned\_jobs}, y liberar los recursos correspondientes en \texttt{local\_resources}), se respeta un orden de adquisición y liberación consistente entre las distintas rutas del código para evitar la posibilidad de un interbloqueo entre hilos a nivel de los propios \emph{locks} del agente C.
+
+\subsection{Orquestación Centralizada, Escritura Asíncrona y Tolerancia a Fallos}
+
+El módulo \texttt{resource\_adapter.c} no solo actúa como puente entre la red y las estructuras de datos, sino que es el orquestador principal que garantiza la consistencia del agente C. Sus responsabilidades abarcan desde la ejecución segura de comandos hasta la gestión de escrituras no bloqueantes y la recuperación ante caídas.
+
+\paragraph{Enrutamiento de Comandos (El Switch Central).}
+Una vez que el hilo trabajador extrae y decodifica el comando del buffer entrante (fase de \emph{parsing}), el adaptador de recursos recibe una estructura con la directiva parseada. Para procesarla, emplea una estructura de \emph{switch-case} cuyo propósito fundamental es estandarizar la adquisición de los \emph{locks} (\texttt{lock\_local}, \texttt{lock\_known} o \texttt{lock\_owned}) antes de derivar la ejecución a los módulos correspondientes (\texttt{local\_resources} u \texttt{owned\_jobs}). 
+
+Esta separación estricta en el \emph{switch} aísla la lógica de red de la lógica de negocio y asegura que el \emph{thread pool} ejecute rutas de código predecibles. Al adquirir los locks en un orden predefinido según el tipo de comando (por ejemplo, peticiones de Erlang vs. tráfico cruzado entre agentes), se elimina la posibilidad de un interbloqueo interno a nivel de los hilos de C.
+
+\paragraph{Gestión de Escrituras No Bloqueantes (Outbox).}
+Dado que el agente emplea \texttt{epoll} y los descriptores de archivo están configurados como no bloqueantes (\texttt{O\_NONBLOCK}), existe la posibilidad de que una llamada a sistema como \texttt{send()} o \texttt{write()} no pueda transmitir la totalidad del mensaje inmediatamente (retornando errores como \texttt{EAGAIN} o \texttt{EWOULDBLOCK}) si los buffers del kernel están saturados. Bloquear el hilo trabajador a la espera de que la red se libere degradaría la arquitectura concurrente.
+
+Para solucionar esto, el sistema asocia una cola de salida (\emph{Outbox}) a cada conexión activa. Si el adaptador de recursos intenta enviar una respuesta y el kernel solo acepta una parte de los bytes, el agente encola el remanente en el \emph{Outbox} del socket y rearma el descriptor en \texttt{epoll} añadiendo la bandera \texttt{EPOLLOUT}. Cuando el socket vuelve a estar disponible para escritura, \texttt{epoll} notifica al hilo principal, un trabajador toma la tarea y vacía progresivamente el \emph{Outbox}. Esto garantiza que ningún mensaje se pierda o corrompa, independientemente de la congestión de la red.
+
+\paragraph{Rutinas de Recuperación ante Fallos.}
+En un entorno distribuido, las fallas son inevitables. \texttt{resource\_adapter.c} centraliza el manejo de desconexiones en tres escenarios, garantizando que los recursos retenidos siempre se liberen:
+
+\begin{enumerate}
+    \item \textbf{Caída del Planificador Erlang (TCP Local):} Si el proceso Erlang muere o el socket local se cierra abruptamente, el adaptador detecta el evento y purga el módulo \texttt{owned\_jobs}. Esto implica cancelar localmente todos los trabajos en vuelo y emitir de forma proactiva mensajes \texttt{RELEASE} a los agentes remotos. El agente C no finaliza; regresa a su estado base esperando que un nuevo planificador se conecte.
+    \item \textbf{Caída de un Agente Remoto (TCP Público):} Si se corta la conexión directa con un agente, se dispara una doble rutina de limpieza orquestada por el adaptador. Primero, invoca a \texttt{local\_resources} para liberar las reservas físicas que el nodo caído tenía en nuestra máquina. Segundo, invoca a \texttt{owned\_jobs} para evaluar qué trabajos locales dependían de ese nodo remoto; al no poder completarse, se marcan como fallidos y se envía un \texttt{JOB\_DENIED} al planificador Erlang.
+    \item \textbf{Nodo Inalcanzable (Timeout UDP):} Si el módulo \texttt{known\_nodes} detecta que un nodo ha excedido su límite de tiempo sin enviar mensajes \texttt{ANNOUNCE}, se lo elimina del directorio. Aunque no haya un evento de cierre TCP explícito, esta eliminación programática fuerza al adaptador a desencadenar exactamente la misma doble rutina de limpieza descrita en el paso anterior, purgando el clúster de nodos "fantasma".
+\end{enumerate}
 
 %---------------------------------------------------------------
 \section{Protocolo de Comunicación}
@@ -368,7 +481,7 @@ at (5,-7)
 \end{figure}
 \newpage
 %---------------------------------------------------------------
-\section{Estrategia de Prevención de Deadlocks}
+\section{Sincronización y Prevención de Deadlocks}
 
 \subsection{Descripción del Problema}
 
@@ -419,6 +532,12 @@ Con el invariante de ordenamiento aplicado, el escenario de deadlock se resuelve
 
 El invariante clave es: \textit{ningún trabajo puede retener un recurso de un nodo ``posterior'' mientras espera un recurso de un nodo ``anterior''.} La espera circular es estructuralmente imposible.
 
+\subsection{Convención del Entorno de Pruebas}
+
+Para simplificar las pruebas de interbloqueo sin las restricciones del ordenamiento global de recursos, se introdujo una convención para la variable de entorno \texttt{ENV}. Cuando \texttt{ENV} se establece en \texttt{"test"}, la función \texttt{generate\_job\_request} omite el paso de ordenamiento de recursos, permitiendo que los trabajos soliciten recursos en un orden arbitrario. Esto hace posible activar deliberadamente el escenario de interbloqueo descrito en la Sección 4 y verificar que el sistema lo detecte o se recupere de él.
+
+En producción (\texttt{ENV} sin establecer o con cualquier otro valor), siempre se aplica el ordenamiento global y el interbloqueo se previene estructuralmente.
+
 \subsection{Análisis de Livelock}
 
 Además del interbloqueo, se analizó la posibilidad de un \emph{livelock}: un escenario en el que dos trabajos compiten repetidamente por el mismo recurso, ambos son rechazados, reintentan, y vuelven a competir indefinidamente sin que ninguno progrese. En la implementación actual del agente C, cuando un recurso no está disponible, la solicitud no se rechaza con \texttt{DENIED}: se encola en una cola FIFO específica del recurso (\texttt{request\_queue}) y se atiende automáticamente en cuanto el recurso se libera, respetando el orden de llegada. Esto garantiza que toda solicitud eventualmente progresa, sin necesidad de que el planificador Erlang reintente. Por lo tanto, bajo el diseño actual, el livelock no puede ocurrir: no existe un camino en el que dos trabajos queden reintentando la misma solicitud en bucle, ya que el agente C nunca deniega un recurso simplemente por no estar disponible en el momento de la solicitud, sino que garantiza su entrega ordenada mediante la cola de espera.
@@ -463,96 +582,7 @@ ok {job_scheduler,init} "[job_scheduler] job_granted" 5 {{2006,5,11},{14,32,20}}
 Registrar el logger bajo un átomo fijo evita tener que pasar el PID del logger a través de cada llamada a función. Cualquier proceso en el sistema puede registrar un evento en cualquier momento sin necesidad de mantener una referencia.
 
 %---------------------------------------------------------------
-\section{Contribuciones del Equipo}
-
-\begin{center}
-\begin{tabular}{ll}
-\toprule
-\textbf{Miembro} & \textbf{Contribuciones} \\
-\midrule
-{[Lucio Oviedo Dell'Orefice]} & Agente C: servidor epoll, manejo de TCP, E/S no bloqueante. \\\\
-{[Juan Ignacio Gorgo]} & Agente C: gestión de recursos, colas FIFO, lógica \\ &      GRANTED/DENIED. \\\\
-{[Camila Sarasúa]} & Erlang: planificador de trabajos, prevención de interbloqueos, \\ & máquina de estados de los trabajos. \\\\
-{[Santiago Salvático]} & Erlang: \texttt{erlang\_c\_bridge}, \texttt{event\_logger}, \texttt{header.hrl},\\ & documentación, integración. \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\section{Desafíos de Implementación}
-
-Durante el desarrollo del gestor de recursos distribuido, se identificaron y resolvieron varios problemas de implementación. Estos problemas influyeron tanto en el protocolo de comunicación como en la arquitectura interna del sistema.
-
-\subsection{Identificación de Agentes}
-
-Inicialmente, los agentes C se identificaban únicamente por su dirección IP. Este enfoque resultó insuficiente cuando se ejecutaban múltiples agentes en el mismo host, ya que diferentes nodos podían compartir la misma IP mientras escuchaban en puertos distintos. Para resolver este problema, los agentes se identificaron de forma única utilizando el par:
-
-\begin{center}
-\texttt{(IP, Puerto)}
-\end{center}
-
-Este identificador pasó a formar parte del descubrimiento de nodos, la comunicación remota y los mensajes de asignación de recursos, lo que permitió que múltiples agentes coexistieran en la misma máquina.
-
-\subsection{Propiedad de Recursos Remotos}
-
-A medida que el sistema evolucionó para admitir múltiples agentes, los recursos podían pertenecer a diferentes nodos. Una solicitud de trabajo podría requerir recursos distribuidos en varias máquinas. Por esta razón, los descriptores de recursos se ampliaron para incluir la información del nodo de destino. Por lo tanto, las operaciones de reserva y liberación se dirigen al agente remoto correcto, lo que garantiza que los recursos se asignen y liberen de manera consistente.
-
-\subsection{Tráfico de Descubrimiento UDP}
-
-El mecanismo de descubrimiento distribuido se basa en anuncios periódicos de UDP entre agentes. Las primeras versiones utilizaban un intervalo de anuncio muy corto, lo que producía un tráfico de red innecesario y una salida de log excesiva. Además, los parámetros de inicio incorrectos ocasionalmente causaban mensajes de anuncio no válidos. El protocolo de descubrimiento se estabilizó aumentando el intervalo de difusión (broadcast) y estandarizando el formato del anuncio:
-
-\begin{lstlisting}
-ANNOUNCE <port> cpu:<cpu> mem:<memory> gpu:<gpu>
-\end{lstlisting}
-
-Esto redujo el ruido de la red manteniendo un descubrimiento de nodos confiable.
-
-%---------------------------------------------------------------
-\section{Problemas Encontrados y Soluciones}
-
-\subsection{Colisión de Job ID entre Nodos en la Misma IP}
-
-\textbf{Problema:} La asignación especifica que dos nodos pueden compartir la misma dirección IP siempre que utilicen puertos diferentes. Dado que el programador (scheduler) de Erlang de cada nodo genera IDs de trabajo de forma independiente utilizando \texttt{erlang:unique\_integer/1}, dos programadores en la misma IP pueden producir IDs de trabajo idénticos. Cuando un tercer agente recibe un mensaje \texttt{RESERVE 42 cpu 2}, no puede determinar qué nodo lo envió basándose únicamente en el ID de trabajo.
-
-\textbf{Solución:} El agente en C ya tiene acceso al descriptor de archivo (\texttt{fd}) de la conexión TCP entrante a través del parámetro \texttt{SOCKET} en \texttt{resource\_adapter\_patch}. Dado que el kernel garantiza que no hay dos conexiones activas que compartan el mismo \texttt{fd} dentro de un proceso, el par \texttt{(job\_id, fd)} es globalmente único:
-
-\begin{itemize}
-\item El \texttt{fd} identifica de forma única qué nodo envió el mensaje.
-\item Dentro de la misma conexión (\texttt{fd}), \texttt{erlang:unique\_integer} garantiza que el ID de trabajo nunca se repita.
-\end{itemize}
-
-La solución no requirió cambios en el protocolo de red: el \texttt{fd} ya está disponible en toda la tubería de manejo de eventos y solo fue necesario incorporarlo como parte de la clave de trabajo en la tabla de trabajos activos.
-
-\subsection{Cierre prematuro del socket}
-
-\textbf{Problema:} Cuando el proceso que abrió un socket TCP finaliza, Erlang cierra el socket automáticamente. Esto provocaba que la conexión se cayera cuando \texttt{conn\_handler} generaba procesos hijos y luego terminaba.
-
-\textbf{Solución:} El ID del socket se pasa directamente a los procesos \texttt{sender} (emisor) y \texttt{receiver} (receptor) en el momento de su creación. Dado que estos son procesos de larga duración, el socket permanece abierto durante toda la sesión.
-
-\subsection{Registro del ID del proceso de registro (Logger)}
-
-\textbf{Problema:} Pasar el PID del logger a través de cada llamada a función creaba ruido innecesario entre los módulos.
-
-\textbf{Solución:} El logger se registra bajo el átomo \texttt{eventLoggerId} mediante \texttt{register/2}. Todos los módulos envían mensajes de registro directamente al átomo.
-
-\subsection{Bloqueo de lectura TCP vs. paso de mensajes en Erlang}
-
-\textbf{Problema:} Un proceso bloqueado en \texttt{gen\_tcp:recv} con \texttt{{active, false}} no puede recibir mensajes de Erlang simultáneamente. La alternativa, \texttt{{active, true}}, entrega los datos TCP directamente al buzón del proceso; pero si el agente C envía mensajes más rápido de lo que el proceso los consume, el buzón puede agotar la memoria.
-
-\textbf{Solución:} Mantuvimos \texttt{{active, false}} y separamos el tráfico entrante y saliente en dos procesos dedicados:
-\begin{itemize}
-\item \texttt{receiver:} se bloquea en \texttt{gen\_tcp:recv} esperando las respuestas del agente C.
-\item \texttt{sender:} se bloquea en \texttt{receive} esperando las directivas del programador.
-\end{itemize}
-Cada proceso tiene una única responsabilidad de bloqueo, evitando ambos problemas.
-
-\subsection{Fragmentación de Mensajes TCP (Framing)}
-
-\textbf{Problema:} TCP es un protocolo orientado a flujo de bytes, no a mensajes discretos. Una única llamada de lectura puede entregar un mensaje incompleto, o varios mensajes concatenados en un mismo bloque de datos (por ejemplo, la respuesta \texttt{NODES ...} seguida inmediatamente de un \texttt{JOB\_GRANTED ...} si ambos se generaron con poca diferencia de tiempo). Si esto no se maneja explícitamente, el receptor puede intentar interpretar dos comandos como uno solo, provocando errores de parseo o comandos reconocidos como inválidos.
-
-\textbf{Solución:} Se implementó una protección redundante en ambos extremos de la comunicación. Del lado de Erlang, la conexión se abre con la opción \texttt{\{packet, line\}}, la cual delega en la máquina virtual de Erlang la tarea de entregar exactamente una línea completa (delimitada por \texttt{\textbackslash n}) por cada mensaje recibido, sin importar cómo hayan llegado los datos a nivel de socket. Del lado del agente C, al recibir datos se particiona el buffer utilizando \texttt{strtok\_r} sobre el carácter \texttt{\textbackslash n}, procesando cada línea como un comando independiente antes de continuar con la siguiente. Esta doble protección asegura que ningún comando se interprete de forma parcial o combinada, independientemente de cómo el sistema operativo fragmente o agrupe los datos en el socket.
-
-%---------------------------------------------------------------
-\section{Script de Prueba de Deadlock (\texttt{test\_deadlock.sh})}
+\section{Pruebas y Validación (\texttt{test\_deadlock.sh})}
 
 Para cumplir con el requisito de demostrar que la implementación evita el escenario de interbloqueo descrito en la Sección 4, se provee el script \texttt{test\_deadlock.sh}. Este script automatiza la ejecución de dos instancias del agente C en puertos distintos (simulando dos nodos del clúster en la misma máquina), y luego inicia el planificador Erlang conectado a una de ellas:
 
@@ -566,7 +596,9 @@ Para cumplir con el requisito de demostrar que la implementación evita el escen
 
 La verificación de que no ocurrió un interbloqueo se realiza inspeccionando el archivo de log (\texttt{event\_logger.txt}) generado por el planificador: si el sistema funciona correctamente, deben aparecer eventos \texttt{job\_granted} para los trabajos generados, incluso en el escenario donde dos trabajos compiten por los mismos recursos en el mismo orden que el ejemplo de la Sección 4. La ausencia de eventos \texttt{job\_granted} sostenida en el tiempo, junto con trabajos que permanecen indefinidamente en estado \texttt{pending}, sería indicio de un interbloqueo no resuelto.
 
+%---------------------------------------------------------------
 \section{Estructuras de Datos}
+\label{sec:estructuras}
 
 En primera instancia, nos hemos abstraído de la estructura del nodo particionándola en tres módulos:
  
@@ -576,29 +608,9 @@ En primera instancia, nos hemos abstraído de la estructura del nodo particioná
     \item \textbf{Cargas de trabajo propias} \texttt{(owned\_jobs)}
 \end{itemize}
  
-Cada uno de estos módulos está protegido por su propio lock, el cual es manipulado por el modulo \texttt{resource\_adapter.c}  
- 
+Cada uno de estos módulos está protegido por su propio lock, el cual es manipulado por el modulo \texttt{resource\_adapter.c}. 
+
 A continuación se detalla en qué consiste cada uno de ellos.
-
-\subsection{Arquitectura de Concurrencia del Agente C}
-
-El agente C se apoya en un único hilo principal que ejecuta el bucle de eventos de \texttt{epoll}, y un \emph{pool} de hilos de trabajo (\texttt{thread\_pool}) que procesa las tareas resultantes. El hilo principal nunca realiza operaciones bloqueantes: al detectar un evento en \texttt{epoll\_wait}, lo clasifica y, según su tipo, lo atiende directamente (expiración de temporizadores, nuevas conexiones TCP) o lo encola como una \texttt{WorkerTask} para que un hilo del \emph{pool} la procese de forma asíncrona.
-
-Todos los descriptores de archivo correspondientes a conexiones TCP se registran en \texttt{epoll} con la bandera \texttt{EPOLLONESHOT}. Esta bandera indica al kernel que, tras notificar un evento sobre un descriptor, deje de vigilarlo hasta que se lo rearme explícitamente. Esto evita una condición de carrera real: sin \texttt{EPOLLONESHOT}, si llegaran nuevos datos a un socket mientras un hilo del \emph{pool} todavía está procesando el evento anterior sobre ese mismo socket, \texttt{epoll} podría notificar el mismo descriptor a un segundo hilo, resultando en dos hilos leyendo el mismo socket simultáneamente. Al desarmar el descriptor tras cada evento, se garantiza que un socket solo puede estar siendo procesado por un hilo a la vez; una vez que el hilo termina, rearma el descriptor mediante \texttt{rearm\_epoll\_fd}, y \texttt{epoll} vuelve a vigilarlo con normalidad. Ningún dato se pierde durante el intervalo en que el descriptor está desarmado, ya que el kernel conserva los datos entrantes en el buffer del socket hasta que se lo vuelve a registrar.
-
-La tabla \texttt{active\_connections}, que asocia cada descriptor de archivo con su IP, puerto y estado, se protege con un \texttt{pthread\_rwlock}. Dado que la mayoría de los accesos a esta tabla son de lectura (consultar si existe una conexión hacia determinado nodo) y las escrituras son comparativamente poco frecuentes (alta o baja de una conexión), este tipo de lock permite que múltiples hilos lectores accedan concurrentemente, serializando únicamente las operaciones de escritura.
-
-\subsection{Contenedor Global del Nodo y Sincronización}
-
-La información de cada nodo se unifica en una única estructura opaca, \texttt{node\_data\_t}, que actúa como contenedor de los tres módulos descriptos en esta sección (\texttt{known\_nodes}, \texttt{local\_resources} y \texttt{owned\_jobs}). En lugar de utilizar un único \emph{mutex} global para proteger todo el estado del nodo, se optó por un esquema de \textbf{tres locks independientes}, uno por módulo:
-
-\begin{itemize}
-    \item \texttt{lock\_local}: protege los recursos físicos propios y la tabla de trabajos activos concedidos a nodos remotos.
-    \item \texttt{lock\_known}: protege el directorio de nodos conocidos (descubiertos vía \texttt{ANNOUNCE}).
-    \item \texttt{lock\_owned}: protege la tabla de trabajos iniciados por el planificador Erlang local.
-\end{itemize}
-
-Esta separación reduce la contención entre operaciones que, en la práctica, no interfieren entre sí: por ejemplo, actualizar el directorio de nodos conocidos ante un \texttt{ANNOUNCE} no debería bloquear el procesamiento de una reserva local (\texttt{RESERVE}). Cuando una misma operación necesita interactuar con más de un módulo (por ejemplo, al detectar un nodo caído, que requiere leer \texttt{known\_nodes}, identificar los trabajos afectados en \texttt{owned\_jobs}, y liberar los recursos correspondientes en \texttt{local\_resources}), se respeta un orden de adquisición y liberación consistente entre las distintas rutas del código para evitar la posibilidad de un interbloqueo entre hilos a nivel de los propios \emph{locks} del agente C.
 
 \subsection{Nodos conocidos}
  
@@ -756,5 +768,92 @@ El módulo proporciona operaciones para:
 \end{tabular}
 \caption{Complejidades promedio de las operaciones del módulo \texttt{tablahash.c}}
 \end{table}
- 
+
+%---------------------------------------------------------------
+\section{Desafíos de Implementación y Soluciones}
+
+Durante el desarrollo del gestor de recursos distribuido, se identificaron y resolvieron varios problemas de implementación. Estos problemas influyeron tanto en el protocolo de comunicación como en la arquitectura interna del sistema.
+
+\subsection{Identificación de Agentes}
+
+Inicialmente, los agentes C se identificaban únicamente por su dirección IP. Este enfoque resultó insuficiente cuando se ejecutaban múltiples agentes en el mismo host, ya que diferentes nodos podían compartir la misma IP mientras escuchaban en puertos distintos. Para resolver este problema, los agentes se identificaron de forma única utilizando el par:
+
+\begin{center}
+\texttt{(IP, Puerto)}
+\end{center}
+
+Este identificador pasó a formar parte del descubrimiento de nodos, la comunicación remota y los mensajes de asignación de recursos, lo que permitió que múltiples agentes coexistieran en la misma máquina.
+
+\subsection{Propiedad de Recursos Remotos}
+
+A medida que el sistema evolucionó para admitir múltiples agentes, los recursos podían pertenecer a diferentes nodos. Una solicitud de trabajo podría requerir recursos distribuidos en varias máquinas. Por esta razón, los descriptores de recursos se ampliaron para incluir la información del nodo de destino. Por lo tanto, las operaciones de reserva y liberación se dirigen al agente remoto correcto, lo que garantiza que los recursos se asignen y liberen de manera consistente.
+
+\subsection{Tráfico de Descubrimiento UDP}
+
+El mecanismo de descubrimiento distribuido se basa en anuncios periódicos de UDP entre agentes. Las primeras versiones utilizaban un intervalo de anuncio muy corto, lo que producía un tráfico de red innecesario y una salida de log excesiva. Además, los parámetros de inicio incorrectos ocasionalmente causaban mensajes de anuncio no válidos. El protocolo de descubrimiento se estabilizó aumentando el intervalo de difusión (broadcast) y estandarizando el formato del anuncio:
+
+\begin{lstlisting}
+ANNOUNCE <port> cpu:<cpu> mem:<memory> gpu:<gpu>
+\end{lstlisting}
+
+Esto redujo el ruido de la red manteniendo un descubrimiento de nodos confiable.
+
+\subsection{Colisión de Job ID entre Nodos en la Misma IP}
+
+\textbf{Problema:} La asignación especifica que dos nodos pueden compartir la misma dirección IP siempre que utilicen puertos diferentes. Dado que el programador (scheduler) de Erlang de cada nodo genera IDs de trabajo de forma independiente utilizando \texttt{erlang:unique\_integer/1}, dos programadores en la misma IP pueden producir IDs de trabajo idénticos. Cuando un tercer agente recibe un mensaje \texttt{RESERVE 42 cpu 2}, no puede determinar qué nodo lo envió basándose únicamente en el ID de trabajo.
+
+\textbf{Solución:} El agente en C ya tiene acceso al descriptor de archivo (\texttt{fd}) de la conexión TCP entrante a través del parámetro \texttt{SOCKET} en \texttt{resource\_adapter\_patch}. Dado que el kernel garantiza que no hay dos conexiones activas que compartan el mismo \texttt{fd} dentro de un proceso, el par \texttt{(job\_id, fd)} es globalmente único:
+
+\begin{itemize}
+\item El \texttt{fd} identifica de forma única qué nodo envió el mensaje.
+\item Dentro de la misma conexión (\texttt{fd}), \texttt{erlang:unique\_integer} garantiza que el ID de trabajo nunca se repita.
+\end{itemize}
+
+La solución no requirió cambios en el protocolo de red: el \texttt{fd} ya está disponible en toda la tubería de manejo de eventos y solo fue necesario incorporarlo como parte de la clave de trabajo en la tabla de trabajos activos.
+
+\subsection{Cierre Prematuro del Socket}
+
+\textbf{Problema:} Cuando el proceso que abrió un socket TCP finaliza, Erlang cierra el socket automáticamente. Esto provocaba que la conexión se cayera cuando \texttt{conn\_handler} generaba procesos hijos y luego terminaba.
+
+\textbf{Solución:} El ID del socket se pasa directamente a los procesos \texttt{sender} (emisor) y \texttt{receiver} (receptor) en el momento de su creación. Dado que estos son procesos de larga duración, el socket permanece abierto durante toda la sesión.
+
+\subsection{Registro del ID del Proceso de Registro (Logger)}
+
+\textbf{Problema:} Pasar el PID del logger a través de cada llamada a función creaba ruido innecesario entre los módulos.
+
+\textbf{Solución:} El logger se registra bajo el átomo \texttt{eventLoggerId} mediante \texttt{register/2}. Todos los módulos envían mensajes de registro directamente al átomo.
+
+\subsection{Bloqueo de Lectura TCP vs. Paso de Mensajes en Erlang}
+
+\textbf{Problema:} Un proceso bloqueado en \texttt{gen\_tcp:recv} con \texttt{\{active, false\}} no puede recibir mensajes de Erlang simultáneamente. La alternativa, \texttt{\{active, true\}}, entrega los datos TCP directamente al buzón del proceso; pero si el agente C envía mensajes más rápido de lo que el proceso los consume, el buzón puede agotar la memoria.
+
+\textbf{Solución:} Mantuvimos \texttt{\{active, false\}} y separamos el tráfico entrante y saliente en dos procesos dedicados:
+\begin{itemize}
+\item \texttt{receiver:} se bloquea en \texttt{gen\_tcp:recv} esperando las respuestas del agente C.
+\item \texttt{sender:} se bloquea en \texttt{receive} esperando las directivas del programador.
+\end{itemize}
+Cada proceso tiene una única responsabilidad de bloqueo, evitando ambos problemas.
+
+\subsection{Fragmentación de Mensajes TCP (Framing)}
+
+\textbf{Problema:} TCP es un protocolo orientado a flujo de bytes, no a mensajes discretos. Una única llamada de lectura puede entregar un mensaje incompleto, o varios mensajes concatenados en un mismo bloque de datos (por ejemplo, la respuesta \texttt{NODES ...} seguida inmediatamente de un \texttt{JOB\_GRANTED ...} si ambos se generaron con poca diferencia de tiempo). Si esto no se maneja explícitamente, el receptor puede intentar interpretar dos comandos como uno solo, provocando errores de parseo o comandos reconocidos como inválidos.
+
+\textbf{Solución:} Se implementó una protección redundante en ambos extremos de la comunicación. Del lado de Erlang, la conexión se abre con la opción \texttt{\{packet, line\}}, la cual delega en la máquina virtual de Erlang la tarea de entregar exactamente una línea completa (delimitada por \texttt{\textbackslash n}) por cada mensaje recibido, sin importar cómo hayan llegado los datos a nivel de socket. Del lado del agente C, al recibir datos se particiona el buffer utilizando \texttt{strtok\_r} sobre el carácter \texttt{\textbackslash n}, procesando cada línea como un comando independiente antes de continuar con la siguiente. Esta doble protección asegura que ningún comando se interprete de forma parcial o combinada, independientemente de cómo el sistema operativo fragmente o agrupe los datos en el socket.
+
+%---------------------------------------------------------------
+\section{Contribuciones del Equipo}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Miembro} & \textbf{Contribuciones} \\
+\midrule
+Lucio Oviedo Dell'Orefice & Agente C: servidor epoll, manejo de TCP, E/S no bloqueante. \\\\
+Juan Ignacio Gorgo & Agente C: gestión de recursos, colas FIFO, lógica \\ &      GRANTED/DENIED. \\\\
+Camila Sarasúa & Erlang: planificador de trabajos, prevención de interbloqueos, \\ & máquina de estados de los trabajos. \\\\
+Santiago Salvático & Erlang: \texttt{erlang\_c\_bridge}, \texttt{event\_logger}, \texttt{header.hrl},\\ & documentación, integración. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
 \end{document}

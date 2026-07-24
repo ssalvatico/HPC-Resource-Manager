@@ -6,3 +6,11 @@
 
 #C build objects
 /c_agent/build/*
+
+# LaTeX auxiliary files
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.synctex.gz
+*.toc
