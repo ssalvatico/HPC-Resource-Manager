@@ -76,30 +76,8 @@ Santiago Salvático
 Este informe describe el diseño e implementación de un gestor de recursos distribuido para un clúster HPC simulado. Cada nodo consta de dos componentes cooperativos: un \textbf{Agente Gestor de Recursos} escrito en C, y un \textbf{Planificador de Trabajos (Job Scheduler)} escrito en Erlang. Los componentes se comunican a través de TCP en localhost, mientras que los agentes C se comunican entre sí a través de la red utilizando un protocolo ASCII común.
 
 El lado de Erlang es responsable de la generación de trabajos, la orquestación de solicitudes de recursos, la prevención de interbloqueos (deadlocks) y el registro de eventos. El lado de C gestiona los recursos locales, maneja conexiones concurrentes a través de \texttt{epoll} e implementa el descubrimiento de nodos basado en UDP.
-
-%---------------------------------------------------------------
-\section{Arquitectura del Sistema}
-
-En primera instancia, nos hemos abstraído de la estructura del nodo particionándola en sus componentes principales.
-
-\subsection{Arquitectura del Componente Erlang}
-
-El componente Erlang está estructurado en cuatro módulos con responsabilidades claramente separadas:
-
-\begin{center}
-\begin{tabular}{ll}
-\toprule
-\textbf{Módulo} & \textbf{Responsabilidad} \\
-\midrule
-\texttt{header.hrl}         & Macros compartidas, registros y constantes de ordenamiento de recursos \\
-\texttt{erlang\_c\_bridge}  & Gestión de conexiones TCP con el agente C local \\
-\texttt{job\_scheduler}     & Generación de trabajos, lógica de planificación y gestión de estado \\
-\texttt{event\_logger}      & Registro asíncrono de eventos en un archivo \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-El sistema utiliza el modelo de actores: cada unidad lógica se ejecuta como un proceso independiente que se comunica exclusivamente a través del paso de mensajes, sin memoria compartida. El agente C, por su parte, maneja toda la E/S de red utilizando \texttt{epoll}, delegando la lógica de recursos a módulos internos conectados a través de una interfaz bien definida.
+ 
+El sistema consta de dos componentes principales por nodo: un agente C y un planificador Erlang. El lado de Erlang utiliza el modelo de actores: cada unidad lógica se ejecuta como un proceso independiente que se comunica exclusivamente a través del paso de mensajes, sin memoria compartida. El agente C maneja toda la E/S de red utilizando \texttt{epoll}, delegando la lógica de recursos a módulos internos conectados a través de una interfaz bien definida.
 
 \begin{figure}[H]{
 \begin{tikzpicture}[
@@ -113,7 +91,7 @@ El sistema utiliza el modelo de actores: cada unidad lógica se ejecuta como un 
   },
   arr/.style={-{Latex}, thick}
 ]
-
+ 
 \node[box] (receiver)   at (0,4)        {Receiver};
 \node[box] (sched)      at (-4.5,1)     {Job Scheduler};
 \begin{scope}[shift={(9,1)}]
@@ -124,7 +102,7 @@ El sistema utiliza el modelo de actores: cada unidad lógica se ejecuta como un 
   \node[box, minimum width=2.5cm, minimum height=0.7cm] (datastr)    at (0.6, 1.4)  {Data structures};
   \node[box, minimum width=2.5cm, minimum height=0.7cm] (parser)   at (-1,0)  {Parser};
   \node[box, minimum width=2.5cm, minimum height=0.7cm] (fdlist)    at (0.5,-1.3)  {File descriptor list};
-
+ 
   \draw[arr] (parser)  -- node[left, font=\scriptsize, pos=0.6]{interface} (datastr);
   \draw[arr] (datastr)  -- (parser);
   \draw[arr] (datastr) -- node[right, font=\scriptsize]{temps} (fdlist);
@@ -132,12 +110,12 @@ El sistema utiliza el modelo de actores: cada unidad lógica se ejecuta como un 
   \draw[arr] (fdlist)  to[bend left=20] (parser);
   \draw[arr] (parser)  to[bend right=20] (fdlist);
 \end{scope}
-
+ 
 \coordinate (agent) at (6.5,1);
 \node[box] (sender)     at (0,-2.3)     {Sender};
 \node[box] (logger)     at (0,0.9)      {Event Logger};
 \node[box] (udp)        at (5,-2.3)   	{UDP Broadcast Port};
-
+ 
 \draw[arr] (sched) to[bend right=20] node[left, font=\footnotesize] {directives}  (sender);
 \draw[arr] (receiver) to[bend right=20] node[left,font=\footnotesize] {packets}  (sched);
 \draw[arr] (receiver) -- node[left, font=\footnotesize]{logs} (logger);
@@ -147,15 +125,85 @@ El sistema utiliza el modelo de actores: cada unidad lógica se ejecuta como un 
 \draw[arr] (agent) to[bend right=20] node[left, font=\footnotesize] {TCP recv}   (receiver);
 \draw[arr] (agent) -- node[right,font=\scriptsize, pos=0.8] {ANNOUNCE} (udp);
 \draw[arr] (udp) -- (agent);
-
+ 
+ 
 \end{tikzpicture}
 }
-\caption{Arquitectura del sistema de comunicaciones}
+\caption{Simplificación del flujo de comunicaciónes entre Erlang y C}
 \end{figure}
+
+\section{Arquitectura del Componente Erlang}
+
+\subsection{Descripción General de los Módulos}
+ 
+El componente Erlang está estructurado en cuatro módulos con responsabilidades claramente separadas:
+ 
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Módulo} & \textbf{Responsabilidad} \\
+\midrule
+\texttt{header.hrl}         & Macros compartidas, registros y constantes de ordenamiento de recursos \\
+\texttt{erlang\_c\_bridge}  & Gestión de conexiones TCP con el agente C local \\
+\texttt{job\_scheduler}     & Generación de trabajos, lógica de planificación y gestión de estado \\
+\texttt{event\_logger}      & Registro asíncrono de eventos en un archivo \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Procesos livianos y el modelo de actores}
+A diferencia de los hilos del sistema operativo utilizados en el agente C, los procesos de Erlang son entidades livianas administradas enteramente por la máquina virtual (BEAM), con un costo de creación y cambio de contexto mucho menor. Cada proceso posee su propio espacio de memoria privado: no existe memoria compartida entre procesos, por lo que toda comunicación ocurre exclusivamente mediante \textbf{paso de mensajes} asíncrono. Esto elimina por diseño la necesidad de \emph{mutexes} o regiones críticas del lado de Erlang, ya que dos procesos nunca pueden modificar la misma estructura de datos al mismo tiempo: cada uno es dueño exclusivo de su propio estado.
+ 
+\paragraph{Buzones de mensajes y \texttt{receive} selectivo.}
+Cada proceso tiene asociado un buzón (\emph{mailbox}) en el que se acumulan los mensajes enviados mediante el operador \texttt{!} (por ejemplo, \texttt{JobSchedulerId ! \{packet\_received, Packet\}}). El proceso consume estos mensajes con la construcción \texttt{receive}, que realiza \emph{pattern matching} sobre la forma del mensaje para decidir qué cláusula ejecutar:
+ 
+\begin{lstlisting}
+receive
+    {receiver_pid, ReceiverId} -> ...;
+    {sender_pid, SenderId}     -> ...;
+    {packet_received, Packet}  -> ...;
+    {error, Reason}            -> ...
+end
+\end{lstlisting}
+ 
+Esta capacidad de discriminar mensajes por su estructura, en lugar de por el orden de llegada, es lo que permite que un mismo proceso (el \texttt{job\_scheduler}) atienda simultáneamente eventos de naturaleza completamente distinta.
+ 
+\paragraph{Recursión de cola como mecanismo de estado.}
+Erlang no dispone de variables mutables ni de bucles \texttt{while}/\texttt{for} en el sentido imperativo: una vez asignada, una variable no puede reasignarse dentro del mismo ámbito. Por ello, procesos de larga duración como el \texttt{job\_scheduler} implementan su ciclo de vida mediante \textbf{recursión de cola} (\emph{tail recursion}): la función se llama a sí misma pasando el nuevo estado como argumento, en lugar de mutar una variable existente.
+ 
+\begin{lstlisting}
+init(State, NRequests, Env) ->
+    receive
+        {job_granted, JobId} ->
+            State1 = maps:update(JobId, granted, State),
+            init(State1, NRequests, Env);  % el "nuevo" estado se pasa
+        ...
+    end.
+\end{lstlisting}
+ 
+La BEAM optimiza estas llamadas para que no consuman espacio adicional en la pila, este patrón permite que un proceso viva de forma indefinida --- procesando miles de mensajes --- sin riesgo de desbordar la pila ni degradar el rendimiento.
+ 
+\paragraph{Registros como estructuras de datos.}
+Para representar entidades con múltiples campos (como un nodo del clúster o una entrada de log), se utilizan \textbf{registros} (\texttt{records}), definidos en \texttt{header.hrl}:
+ 
+\begin{lstlisting}
+-record(node, {
+    ip,
+    port,
+    cpu,
+    mem,
+    gpu
+}).
+\end{lstlisting}
+ 
+Los registros se traducen internamente a tuplas posicionales, pero permiten acceder y modificar campos por nombre (\texttt{Node\#node.cpu}, \texttt{Node\#node\{cpu = 4\}}), lo que mejora la legibilidad del código y reduce errores al reordenar o agregar campos.
+ 
+\paragraph{Enlace de procesos como mecanismo de propagación de fallos.}
+Tal como se detalla en la Sección~2.3, el mecanismo de \texttt{link/1} conecta bidireccionalmente el ciclo de vida de dos procesos: si uno termina de forma anómala (con una razón de salida distinta de \texttt{normal}), la señal se propaga automáticamente al otro, terminándolo también. Ante cualquier fallo interno de un proceso auxiliar, el sistema completo se detiene de forma visible en lugar de continuar en un estado inconsistente.
 
 \subsection{Secuencia de Inicio del Agente C}
 
-El agente C se inicia con cinco argumentos: dirección IP, puerto TCP y los recursos disponibles de CPU, RAM y GPU. La secuencia de inicio es la siguiente:
+El agente C se inicia con seis argumentos: dirección IP, puerto TCP, los recursos disponibles de CPU, RAM y GPU, y el tamaño de la \emph{thread pool}. La secuencia de inicio es la siguiente:
 
 \begin{enumerate}
     \item El \texttt{ServerContext} se inicializa con los argumentos proporcionados y se crea una nueva instancia de \texttt{epoll}.
@@ -176,23 +224,6 @@ Del lado de Erlang, cuando se llama a \texttt{erlang\_c\_bridge:init/0}:
   \item En caso de éxito, genera \texttt{conn\_handler}, el cual genera a su vez \texttt{sender} y \texttt{receiver}, y notifica al planificador con sus PIDs.
   \item Al agotarse los reintentos, registra el fallo en el log y llama a \texttt{erlang:halt/0}.
 \end{enumerate}
-
-\subsection{Conexión Remota entre el Planificador Erlang y el Agente C}
-
-Una extensión posterior de la consigna requirió que un planificador Erlang pudiera conectarse a un agente C ejecutándose en una máquina distinta, en lugar de restringirse únicamente a \texttt{localhost}. Para lograr esto sin perder la distinción entre tráfico público (entre agentes C) y tráfico local (Erlang hacia su agente), se adoptó un esquema de \textbf{dos puertos TCP consecutivos} por agente:
-
-\begin{itemize}
-    \item \texttt{<port>}: puerto público, utilizado para la comunicación entre agentes C (mensajes \texttt{RESERVE}, \texttt{GRANTED}, \texttt{DENIED}, \texttt{RELEASE}).
-    \item \texttt{<port> + 1}: puerto local, reservado exclusivamente para la interfaz con el planificador Erlang.
-\end{itemize}
-
-Ambos sockets se vinculan a la dirección IP de la LAN del nodo (\texttt{ctx->lan\_ip}) en lugar de restringirse a \texttt{127.0.0.1}, permitiendo que un planificador Erlang remoto se conecte al puerto \texttt{<port>+1} de un agente en otra máquina de la misma red. La función \texttt{erlang\_c\_bridge:init/4} recibe el \texttt{Host} y el \texttt{Port} como parámetros explícitos (en lugar de macros fijas), lo que permite iniciar el planificador con:
-
-\begin{lstlisting}
-make runclient HOST=<ip_del_agente> PORT=<puerto_local>
-\end{lstlisting}
-
-Durante las pruebas de conexión remota se identificó que, si bien el descubrimiento UDP entre agentes funciona correctamente incluso con \emph{firewalls} activos (dado que UDP en modo broadcast suele estar permitido), las conexiones TCP entrantes pueden ser bloqueadas por el firewall del sistema operativo receptor. Esto se manifiesta como un \texttt{JOB\_TIMEOUT} en Erlang para trabajos que involucran un nodo remoto, aun cuando el \texttt{ping} entre las máquinas es exitoso. La solución consiste en habilitar explícitamente ambos puertos TCP (público y local) en el firewall de cada máquina participante; este procedimiento quedó documentado en el \texttt{README.md} del proyecto como parte de la guía de resolución de problemas.
 
 \subsection{Tolerancia a Fallos y Enlace de Procesos}
 
