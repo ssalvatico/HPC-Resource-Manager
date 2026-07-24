@@ -1,6 +1,7 @@
 EBIN = ebin
 
-HOST?=$(shell hostname -I | awk '{print $$1}')
+
+#HOST?=$(shell hostname -I | awk '{print $$1}') #in case we want to connect remotely
 PORT?=8001
 N_REQUESTS?=1
 ENV?=DEV
@@ -21,11 +22,11 @@ $(EBIN)/%.beam: %.erl header.hrl
 
 run: build
 	erl -pa $(EBIN) -noshell \
-	-eval "erlang_c_bridge:init(\"$(HOST)\", $(PORT), $(N_REQUESTS), \"$(ENV)\"), timer:sleep(infinity)."
+	-eval "erlang_c_bridge:init(), timer:sleep(infinity)."
 
 run_test: build
 	erl -pa $(EBIN) -noshell \
-	-eval "erlang_c_bridge:init(\"$(HOST)\", $(PORT), ?N_REQUESTS, \"TEST\"), timer:sleep(infinity)."
+	-eval "erlang_c_bridge:init(), timer:sleep(infinity)."
 clear:
 	@rm -rf $(EBIN)
 	@rm -f *.dump

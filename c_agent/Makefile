@@ -9,7 +9,7 @@ INCLUDES = -Iinclude
 BUILD_DIR = c_build
 
 IP ?= $(shell hostname -I | awk '{print $$1}')
-PORT ?= 8001
+PORT ?= 8000
 CPU ?= 4
 GPU ?= 1
 RAM ?= 8192

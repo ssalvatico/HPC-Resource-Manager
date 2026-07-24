@@ -1,5 +1,5 @@
 
--define(HOST, "127.0.0.1").
+-define(HOST, "localhost").
 -define(PORT, "8001").
 -define(TRIES, 3).
 
