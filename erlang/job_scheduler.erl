@@ -178,8 +178,7 @@ validate_and_get_node(Node) ->
 to_pairs([Key, Value | Rest]) ->
     [{Key, list_to_integer(string:trim(Value))} | to_pairs(Rest)];
 to_pairs([_]) -> [];
-to_pairs([]) ->
-    [].
+to_pairs([]) -> [].
 
 
 %%% Fold function. Populates a #node{} record field from a {ResourceName, Amount} tuple.
@@ -311,6 +310,7 @@ simulate_load(JobId, State1, InitPid) ->
   maps:get(sender_pid, State1) ! {job_directive, JobId, "JOB_RELEASE " ++ integer_to_list(JobId) ++ "\n"},
   InitPid ! {job_release, JobId}.
 
+%%% Prints the state of the Jobs map
 format_state(State) ->
   JobState = maps:without([sender_pid, receiver_pid], State),
   io_lib:format("~p", [JobState]).

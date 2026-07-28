@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 
 /* ========================================================================= */
@@ -103,14 +104,17 @@ static void handle_job_request(ServerContext *ctx, unsigned socket, const char *
  */
 static void handle_reserve(ServerContext *ctx, unsigned socket, const char *buffer, out_msg_t *outbox, int *count) {
     node_data_t NODE = (node_data_t)ctx->mynode;
-    unsigned job_id, cant; char res[10];
+    unsigned job_id, cant; char res[256];
     
-    if (sscanf(buffer, "RESERVE %u %9s %u", &job_id, res, &cant) != 3) return;
-    resource_t type = (strcmp(res, "cpu") == 0) ? CPU : (strcmp(res, "mem") == 0) ? RAM : GPU;
+    if (sscanf(buffer, "RESERVE %u %s %u", &job_id, res, &cant) != 3) return;
+    int valid_length = strlen(res) == 3;
+    resource_t type = (strcmp(res, "cpu") == 0) ? CPU : (strcmp(res, "mem") == 0) ? RAM : (strcmp(res, "gpu") == 0) ? GPU : INVALID_RES_TYPE;
     
     pthread_mutex_lock(&NODE->lock_local);
 
-    int result = new_job_request(NODE->resources, NODE->active_jobs, job_id, socket, cant, type);
+    int result = (type != INVALID_RES_TYPE && valid_length) 
+                    ? new_job_request(NODE->resources, NODE->active_jobs, job_id, socket, cant, type)
+                    : -1;
     
     if (result == 1) { // Resources Granted Immediately
         char msg[64];
@@ -274,6 +278,7 @@ static void handle_check_deadnodes(ServerContext *ctx, out_msg_t *outbox, int *c
         if (zombie_fd != -1) {
             pthread_mutex_lock(&NODE->lock_local);
             free_all_resources_from_socket(NODE->resources, NODE->active_jobs, zombie_fd);
+            close(zombie_fd);
             pthread_mutex_unlock(&NODE->lock_local);
         }
     

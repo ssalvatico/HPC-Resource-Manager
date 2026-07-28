@@ -1,6 +1,6 @@
 -module(event_logger).
 -include("header.hrl").
--export([init/1, init/0, log_event/4]).
+-export([init/1, init/0, log_event/4, format_date/1]).
 
 
 
@@ -19,11 +19,13 @@ init() ->
 init(Fd) ->
     receive
         #logInfo{status = S, src_method = M, detail = D, job_involved = J, timestamp = T} ->
-            LogMsg = unicode:characters_to_binary(  io_lib:format("~w ~w ~p ~w ~w~n", [S,M,D,J,T])  ),
+            LogMsg = unicode:characters_to_binary(  io_lib:format("~w ~w ~p ~w ~p~n", [S,M,D,J,T])  ),
             file:write(Fd, LogMsg)
     end,
     init(Fd).
 
+format_date({{YYYY,MM,DD},{HH,MIN,SEC}}) ->
+    lists:flatten(io_lib:format("~p:~p:~p ~p/~p/~p", [HH,MIN,SEC,DD,MM,YYYY])).
 
 
 %%% Builds a #logInfo{} record and sends it to the logger process.
@@ -34,6 +36,6 @@ log_event(Status, SrcMethod, Detail, JobInvolved) ->
                             src_method = SrcMethod,
                             detail = Detail,
                             job_involved = JobInvolved,
-                            timestamp = ?TIMESTAMP
+                            timestamp = format_date(?TIMESTAMP)
                         },
     ok.
