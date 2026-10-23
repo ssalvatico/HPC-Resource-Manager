@@ -128,12 +128,9 @@ handle_packet(Binary) ->
   end.
 
 do_handle_packet(<<"NODES ", Rest/binary>>) ->
-    NodeList = get_node_list(Rest),
-    case NodeList of
-    [] -> {skip, "No nodes available"};
-    _ ->
-      NodeRecordList = lists:map(fun validate_and_get_node/1, NodeList),
-      {node_records, NodeRecordList}
+    case string:trim(binary_to_list(Rest)) of
+      "" -> {skip, "No nodes available"};
+      _ -> {node_records, lists:map(fun validate_and_get_node/1, get_node_list(Rest))}
     end;
 do_handle_packet(<<"JOB_GRANTED ", Rest/binary>>) ->
     {job_granted, list_to_integer(string:trim(binary_to_list(Rest)))};

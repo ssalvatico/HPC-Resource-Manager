@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 
 /**
  * Active connections guarda todos los fd que estan abiertos, con una diferenciacion en especifico

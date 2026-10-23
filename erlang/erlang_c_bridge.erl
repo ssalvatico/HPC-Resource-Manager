@@ -42,14 +42,14 @@ receiver(Socket, JobSchedulerId) ->
         {ok, Packet} ->
             JobSchedulerId ! {packet_received, Packet},
             event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "packet received", none),
-            io:format("Packet received ~p ~n", [Packet]),
+            io:fwrite("[ERLANG][RECV] ~p ~n", [Packet]),
             receiver(Socket, JobSchedulerId);
         {error, closed} ->
-            io:format("error, closed~n"),
+            io:fwrite("[ERLANG][ERROR] closed~n"),
             JobSchedulerId ! {error, closed},
             event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "connection closed", none);
         {error, Reason} ->
-            io:format("Error received with reason ~p~n",[Reason]),
+            io:fwrite("[ERLANG][ERROR] reason: ~p~n",[Reason]),
             JobSchedulerId ! {error, Reason}
     end.
 

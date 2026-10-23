@@ -167,6 +167,8 @@ void get_known_nodes_payload(known_nodes_t nodes, char * buffer, unsigned max_si
     if (ctx.current_offset > 6 && ctx.current_offset < max_size) {
         ctx.buffer[ctx.current_offset - 1] = '\n';
         ctx.buffer[ctx.current_offset] = '\0';
+    } else {
+        snprintf(ctx.buffer, ctx.max_size, "NODES \n");
     }
 }
 

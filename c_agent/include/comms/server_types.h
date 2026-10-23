@@ -4,7 +4,7 @@
 // macros and global data types
 
 #define MAX_FDS 1024
-#define BUFFER_SIZE 256
+#define BUFFER_SIZE 1024
 #define UDP_PORT 12529
 
 // === MAIN  ===
