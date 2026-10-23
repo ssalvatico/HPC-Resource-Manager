@@ -12,7 +12,7 @@
 
 /**
  * @param argc program executable
- * @param argv array with [ip, port, cpu, gpu, ram, num_threads]
+ * @param argv array with [ip, port, cpu, ram, gpu, num_threads]
  * */ 
 int main(int argc, char *argv[]) {
     // Clean initialization

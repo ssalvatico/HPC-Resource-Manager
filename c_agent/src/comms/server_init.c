@@ -9,7 +9,7 @@
 
 void init_server(ServerContext* ctx, int argc, char *argv[]) {
     if(argc != 7) {
-        fprintf(stderr, "Usage: %s <ip> <port> <cpu> <mem> <gpu> <num_threads>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <ip> <port> <cpu> <ram> <gpu> <num_threads>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 

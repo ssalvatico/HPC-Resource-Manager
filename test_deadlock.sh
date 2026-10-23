@@ -8,7 +8,7 @@ ERLANG_DIR="$ROOT_DIR/erlang"
 
 IP="${1:-127.0.0.1}"
 PORT_A="${2:-8000}"
-PORT_B="${3:-8001}"
+PORT_B="${3:-9000}"
 CPU_A="${4:-4}"
 MEM_A="${5:-8192}"
 GPU_A="${6:-1}"

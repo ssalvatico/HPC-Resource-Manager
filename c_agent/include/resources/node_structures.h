@@ -44,7 +44,7 @@ typedef struct node_data_t_ * node_data_t;
  * @param ram Total physical RAM available on this machine.
  * @return A pointer to the fully initialized node_data_t, or NULL on memory allocation failure.
  */
-node_data_t init_node(unsigned cpu, unsigned gpu, unsigned ram);
+node_data_t init_node(unsigned cpu, unsigned ram, unsigned gpu);
 
 /**
  * @brief Safely destroys the global node structure and prevents memory leaks 

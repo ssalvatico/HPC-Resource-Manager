@@ -1,8 +1,6 @@
 #ifndef SERVER_INIT_H
 #define SERVER_INIT_H
 
-#include <sys/timerfd.h>
-#include <unistd.h>
 #include "server_types.h"
 
 /**
@@ -15,9 +13,9 @@
  * Additionally, it configures three non-blocking timer file descriptors 
  * (for TCP events, UDP announcements, and Garbage Collection) and registers 
  * them, along with the UDP socket, into the epoll interest list.
- * * @param ctx Pointer to the ServerContext structure to be populated.
- * * @param argc The number of command-line arguments.
- * * @param argv The array of command-line argument strings (expects [1]=port, [2]=IP).
+ * @param ctx Pointer to the ServerContext structure to be populated.
+ * @param argc The number of command-line arguments.
+ * @param argv The array of command-line argument strings (expects [1]=IP, [2]=PORT).
  * @return Void. The program exits (EXIT_FAILURE) if arguments are invalid.
  */
 void init_server(ServerContext* ctx, int argc, char *argv[]);
