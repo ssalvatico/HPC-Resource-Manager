@@ -167,6 +167,12 @@ sudo ufw allow <public_port+1>/tcp   # Erlang port
 sudo ufw enable
 ```
 
+In case that two C agents can't discover each other via UDP,
+try with disabling the firewall on the UDP port:
+```bash
+sudo ufw allow <udp_port>/udp
+```
+
 If the problem persists, temporarily disable the firewall to confirm it is
 the cause:
 
