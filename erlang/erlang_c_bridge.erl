@@ -11,7 +11,7 @@
 connect(_Host, _Port, 0, JobSchedulerId) ->
     event_logger:log_event(close, {?MODULE, ?FUNCTION_NAME}, "OUT OF TRIES", none),
     JobSchedulerId ! {error, "Out of tries"},
-    timer:sleep(500),
+    timer:sleep(?TIMEOUT),
     erlang:halt();
 connect(Host, Port, Nth_try, JobSchedulerId) ->
     case gen_tcp:connect(Host , Port , [binary, {packet, line}, {active, false}] , ?TIMEOUT) of
@@ -83,16 +83,16 @@ sender(Socket, JobSchedulerId) ->
                     JobSchedulerId ! {error, get_nodes}
             end;
         % Here we cover the cases JOB_REQUEST and JOB_RELEASE
-        {job_directive, JobId, Packet} ->
+        {job_directive, JobId, Kind, Packet} ->
             case gen_tcp:send(Socket, Packet) of
                 ok ->
+                    io:fwrite("[Erlang][Sent][job=~p] ~s~n", [JobId, Packet]),
                     event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, Packet, JobId),
-                    io:fwrite("[Erlang][Sent][job=~p] ~s", [JobId, Packet]),
-                    JobSchedulerId ! {ok, JobId, job_directive};
+                    JobSchedulerId ! {ok, JobId, Kind};
                 {error, Reason} ->
                     io:fwrite("[Erlang][ERR][job=~p] ~p~n", [JobId, Reason]),
                     event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, Reason, JobId),
-                    JobSchedulerId ! {error, JobId, job_directive}
+                    JobSchedulerId ! {error, JobId, Kind, Packet}
             end
     end,
     sender(Socket, JobSchedulerId).

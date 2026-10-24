@@ -2,7 +2,7 @@
 -define(HOST, "localhost").
 -define(PORT, "8001").
 -define(TRIES, 3).
-
+-define(RETRY_DELAY, 1000).
 -define(TIMESTAMP, calendar:local_time()).
 
 -define(TIMEOUT, 5000).

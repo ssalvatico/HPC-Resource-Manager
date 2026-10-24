@@ -45,10 +45,10 @@ init(State, NRequests, Env) when is_integer(NRequests) ->
             JobId = erlang:unique_integer([positive]),
             {JobRequest, _AvailableResources} = generate_job_request(JobId, NodeRecordList, Env),
             event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_request", JobId),
-            io:fwrite("[Erlang][Sent] job_request id=~p~n", [JobId]),
+            io:fwrite("[Erlang][Sent] job dispatched id=~p~n", [JobId]),
             SenderId = maps:get(sender_pid, State),
-            SenderId ! {job_directive, JobId, JobRequest},
-            StateAcc#{JobId => pending}
+            SenderId ! {job_directive, JobId, request, JobRequest},
+            StateAcc#{JobId => dispatched} %! CAMBIO ACA CAMBIO ACA CAMBIO ACA CAMBIO ACA CAMBIO ACA CAMBIO ACA 
           end, State, lists:seq(1, NRequests)),
           init(NewState, NRequests, Env);
 
@@ -56,7 +56,7 @@ init(State, NRequests, Env) when is_integer(NRequests) ->
           event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_granted", JobId),
           io:fwrite("[Erlang][Recv] granted id=~p~n", [JobId]),
           case maps:get(JobId, State, undefined) of
-            pending ->
+            Status when Status =:= pending; Status =:= dispatched -> %! CAMBIO ACA CAMBIO ACA CAMBIO ACA CAMBIO ACA CAMBIO ACA CAMBIO ACA
               State1 = maps:put(JobId, granted, State),
               SchedulerPid = self(),
               spawn_link(fun () -> simulate_load(JobId, State1, SchedulerPid) end),
@@ -82,6 +82,43 @@ init(State, NRequests, Env) when is_integer(NRequests) ->
           event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "job_timeout", JobId),
           io:fwrite("[Erlang][Recv] timeout id=~p~n", [JobId]),
           init(State1, NRequests, Env);
+
+        {ok, JobId, request} ->
+          case maps:get(JobId, State, undefined) of
+              dispatched ->
+                  event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "request sent", JobId),
+                  io:fwrite("[Erlang][Sent] request confirmed id=~p~n", [JobId]),
+                  init(State#{JobId => pending}, NRequests, Env);
+              _ ->
+                  event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "request ack ignored", JobId),
+                  init(State, NRequests, Env)
+          end;
+
+        {ok, JobId, release} ->
+            event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "release sent", JobId),
+            io:fwrite("[Erlang][Sent] release confirmed id=~p~n", [JobId]),
+            init(State, NRequests, Env);
+
+        {error, JobId, request, _Packet} ->
+            case maps:get(JobId, State, undefined) of
+                dispatched ->
+                    event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "request failed, job discarded", JobId),
+                    io:fwrite("[Erlang][ERR] request failed id=~p, discarded~n", [JobId]),
+                    init(maps:remove(JobId, State), NRequests, Env);
+                _ ->
+                    event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "request failed, job already gone", JobId),
+                    init(State, NRequests, Env)
+            end;
+
+        {error, JobId, release, Packet} ->
+            event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "release failed, retrying", JobId),
+            io:fwrite("[Erlang][ERR] release failed id=~p, retrying~n", [JobId]),
+            SenderId = maps:get(sender_pid, State),
+            spawn(fun() ->
+                timer:sleep(?RETRY_DELAY),
+                SenderId ! {job_directive, JobId, release, Packet}
+            end),
+            init(State, NRequests, Env);
 
         {skip, _} ->
           event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "unknown packet received", none),
@@ -304,7 +341,7 @@ build_job_request({Ip, Port, Name, Amount}, Acc) ->
 simulate_load(JobId, State1, InitPid) ->
   timer:sleep(rand:uniform(?WORK_TIME)),
   event_logger:log_event(ok, {?MODULE, ?FUNCTION_NAME}, "Executing job...", JobId),
-  maps:get(sender_pid, State1) ! {job_directive, JobId, "JOB_RELEASE " ++ integer_to_list(JobId) ++ "\n"},
+  maps:get(sender_pid, State1) ! {job_directive, JobId, release, "JOB_RELEASE " ++ integer_to_list(JobId) ++ "\n"},
   InitPid ! {job_release, JobId}.
 
 %%% Prints the state of the Jobs map
