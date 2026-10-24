@@ -1,9 +1,7 @@
 TARGET = c_agent
 
 CC = gcc
-CFLAGS = -Wall -Wextra -pthread -g
-
-# Si tus headers están en c_agent/include, esta línea es correcta
+CFLAGS = -Wall -Wextra -pthread -g -MMD -MP
 INCLUDES = -Iinclude
 
 BUILD_DIR = c_build
@@ -15,23 +13,24 @@ GPU ?= 1
 RAM ?= 8192
 THREADS ?= 4
 
-# 1. SOLO ARCHIVOS DE PRODUCCIÓN (Cero tests aquí para evitar choques de main)
 SRCS = main.c \
-	   src/comms/event_handler.c \
-	   src/comms/resource_adapter.c \
-	   src/comms/server_init.c \
-	   src/comms/sys_epoll.c \
-	   src/comms/sys_socket.c \
-	   src/comms/thread_pool.c \
-	   src/resources/node_structures.c \
-	   src/resources/local_resource.c \
-	   src/resources/owned_jobs.c \
-	   src/resources/known_nodes.c \
-	   src/resources/queues.c \
-	   src/resources/tablahash.c
+	src/comms/event_handler.c \
+	src/comms/resource_adapter.c \
+	src/comms/server_init.c \
+	src/comms/sys_epoll.c \
+	src/comms/sys_socket.c \
+	src/comms/thread_pool.c \
+	src/resources/node_structures.c \
+	src/resources/local_resource.c \
+	src/resources/owned_jobs.c \
+	src/resources/known_nodes.c \
+	src/resources/queues.c \
+	src/resources/tablahash.c
 
-OBJS = $(SRCS:.c=.o)
-OBJS := $(addprefix $(BUILD_DIR)/,$(OBJS))
+OBJS = $(addprefix $(BUILD_DIR)/,$(SRCS:.c=.o))
+DEPS = $(OBJS:.o=.d)
+
+.PHONY: all run clear
 
 all: $(TARGET)
 
@@ -42,13 +41,11 @@ $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-# 2. Comando RUN actualizado con 6 parámetros: IP Port CPU GPU RAM Hilos
+-include $(DEPS)
+
 run: $(TARGET)
+	@test -n "$(IP)" || (echo "No se pudo detectar IP; pasala con IP=..." && exit 1)
 	./$(TARGET) "$(IP)" "$(PORT)" "$(CPU)" "$(RAM)" "$(GPU)" "$(THREADS)"
 
-
 clear:
-	@rm -rf $(BUILD_DIR)
-	@rm -f $(TARGET)
-
-.PHONY: all run clear
+	@rm -rf $(BUILD_DIR) $(TARGET)

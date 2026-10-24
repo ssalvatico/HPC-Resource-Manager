@@ -1,35 +1,30 @@
 EBIN = ebin
 
-
-#HOST?=$(shell hostname -I | awk '{print $$1}') #in case we want to connect remotely
-PORT?=8001
-N_REQUESTS?=1
-ENV?=DEV
+HOST ?= localhost
+PORT ?= 8001
+ENV ?= DEV
 
 MODULES = \
 	erlang_c_bridge \
 	event_logger \
 	job_scheduler
 
-$(EBIN):
-	mkdir -p $(EBIN)
+.PHONY: build run clear
 
 build: $(EBIN) $(MODULES:%=$(EBIN)/%.beam)
 
-$(EBIN)/%.beam: %.erl header.hrl
+$(EBIN):
+	mkdir -p $(EBIN)
+
+$(EBIN)/%.beam: %.erl header.hrl | $(EBIN)
 	erlc -o $(EBIN) $<
 
-
 run: build
-	erl -pa $(EBIN) -noshell \
+	HOST=$(HOST) PORT=$(PORT) ENV=$(ENV) erl -pa $(EBIN) -noshell \
 	-eval "erlang_c_bridge:init(), timer:sleep(infinity)."
 
-run_test: build
-	erl -pa $(EBIN) -noshell \
-	-eval "erlang_c_bridge:init(), timer:sleep(infinity)."
 clear:
 	@rm -rf $(EBIN)
-	@rm -f *.dump
-	@rm -f event_logger.txt
+	@rm -f *.dump event_logger.txt
 
-.PHONY: build run run_test clear
+.PHONY: build run clear

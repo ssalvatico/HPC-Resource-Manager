@@ -110,19 +110,19 @@ init(State, NRequests, Env) when is_integer(NRequests) ->
                     init(State, NRequests, Env)
             end;
 
-        {error, JobId, release, Packet} ->
+        {error, JobId, release, _Packet} ->
             event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "release failed, retrying", JobId),
             io:fwrite("[Erlang][ERR] release failed id=~p, retrying~n", [JobId]),
             SenderId = maps:get(sender_pid, State),
             spawn(fun() ->
                 timer:sleep(?RETRY_DELAY),
-                SenderId ! {job_directive, JobId, release, Packet}
+                SenderId ! {job_directive, JobId, release, _Packet}
             end),
             init(State, NRequests, Env);
 
-        {skip, _} ->
+        {skip, _Packet} ->
           event_logger:log_event(error, {?MODULE, ?FUNCTION_NAME}, "unknown packet received", none),
-          io:fwrite("[Erlang][Recv] unknown packet~n", []),
+          io:fwrite("[Erlang][Recv] unknown packet: ~p~n", [_Packet]),
           init(State, NRequests, Env)
       end;
     {ok, get_nodes} ->
